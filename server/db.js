@@ -1,3 +1,4 @@
+import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -5,131 +6,422 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const DB_FILE = path.join(__dirname, 'taskpulse_db.json');
+const SQLITE_FILE = path.join(__dirname, 'database.sqlite');
+const sqliteDb = new Database(SQLITE_FILE);
 
-// Default Database Data Structure
-const DEFAULT_DATA = {
-  users: [],
-  tasks: [],
-  categories: [],
-  feedback: []
-};
+// Enable WAL mode for high concurrency and performance
+sqliteDb.pragma('journal_mode = WAL');
 
-function loadDatabase() {
-  try {
-    if (fs.existsSync(DB_FILE)) {
-      const content = fs.readFileSync(DB_FILE, 'utf-8');
-      return JSON.parse(content);
-    }
-  } catch (err) {
-    console.warn('[Database Warning] Error loading db file, resetting to clean schema', err);
-  }
-  return { ...DEFAULT_DATA };
+// Initialize Database Tables
+sqliteDb.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    name TEXT,
+    email TEXT UNIQUE NOT NULL,
+    password_hash TEXT,
+    avatar TEXT,
+    provider TEXT,
+    email_verified INTEGER DEFAULT 0,
+    verification_token TEXT,
+    reset_token TEXT,
+    reset_token_expires INTEGER,
+    theme_preference TEXT DEFAULT 'dark',
+    role TEXT DEFAULT 'user',
+    created_at TEXT,
+    updated_at TEXT,
+    last_login TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS tasks (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    category TEXT,
+    priority TEXT,
+    status TEXT,
+    dueDate TEXT,
+    dueTime TEXT,
+    recurrence TEXT,
+    completed INTEGER DEFAULT 0,
+    archived INTEGER DEFAULT 0,
+    subtasks TEXT,
+    enableEmailReminder INTEGER DEFAULT 0,
+    emailNotification INTEGER DEFAULT 0,
+    lastNotifiedTime TEXT,
+    createdAt TEXT,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS categories (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    color TEXT,
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS feedback (
+    id TEXT PRIMARY KEY,
+    user_email TEXT,
+    subject TEXT,
+    message TEXT,
+    appVersion TEXT,
+    created_at TEXT
+  );
+`);
+
+// Formatter Helpers
+function formatUser(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    password_hash: row.password_hash,
+    avatar: row.avatar,
+    provider: row.provider,
+    email_verified: Boolean(row.email_verified),
+    verification_token: row.verification_token,
+    reset_token: row.reset_token,
+    reset_token_expires: row.reset_token_expires,
+    theme_preference: row.theme_preference || 'dark',
+    role: row.role || 'user',
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    last_login: row.last_login
+  };
 }
 
-function saveDatabase(data) {
+function formatTask(row) {
+  if (!row) return null;
+  let parsedSubtasks = [];
   try {
-    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
+    parsedSubtasks = typeof row.subtasks === 'string' ? JSON.parse(row.subtasks) : (row.subtasks || []);
+  } catch (e) {
+    parsedSubtasks = [];
+  }
+  return {
+    id: row.id,
+    user_id: row.user_id,
+    title: row.title,
+    description: row.description || '',
+    category: row.category || 'Work',
+    priority: row.priority || 'medium',
+    status: row.status || 'to_do',
+    dueDate: row.dueDate || '',
+    dueTime: row.dueTime || '09:00',
+    recurrence: row.recurrence || 'none',
+    completed: Boolean(row.completed),
+    archived: Boolean(row.archived),
+    subtasks: parsedSubtasks,
+    enableEmailReminder: Boolean(row.enableEmailReminder),
+    emailNotification: Boolean(row.emailNotification),
+    lastNotifiedTime: row.lastNotifiedTime,
+    createdAt: row.createdAt
+  };
+}
+
+// One-time Migration from taskpulse_db.json if present
+function migrateJsonDataIfNeeded() {
+  const jsonPath = path.join(__dirname, 'taskpulse_db.json');
+  if (!fs.existsSync(jsonPath)) return;
+
+  const count = sqliteDb.prepare('SELECT COUNT(*) as cnt FROM users').get().cnt;
+  if (count > 0) return;
+
+  try {
+    const raw = fs.readFileSync(jsonPath, 'utf-8');
+    const data = JSON.parse(raw);
+    console.log('[Migration] Migrating existing data from taskpulse_db.json to SQLite database...');
+
+    const migrateTx = sqliteDb.transaction(() => {
+      if (Array.isArray(data.users)) {
+        for (const user of data.users) {
+          sqliteDb.prepare(`
+            INSERT OR IGNORE INTO users (id, name, email, password_hash, avatar, provider, email_verified, verification_token, reset_token, reset_token_expires, theme_preference, role, created_at, updated_at, last_login)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            user.id,
+            user.name,
+            user.email,
+            user.password_hash || null,
+            user.avatar || null,
+            user.provider || 'email',
+            user.email_verified ? 1 : 0,
+            user.verification_token || null,
+            user.reset_token || null,
+            user.reset_token_expires || null,
+            user.theme_preference || 'dark',
+            user.role || 'user',
+            user.created_at || new Date().toISOString(),
+            user.updated_at || new Date().toISOString(),
+            user.last_login || new Date().toISOString()
+          );
+        }
+      }
+
+      if (Array.isArray(data.tasks)) {
+        for (const task of data.tasks) {
+          sqliteDb.prepare(`
+            INSERT OR IGNORE INTO tasks (id, user_id, title, description, category, priority, status, dueDate, dueTime, recurrence, completed, archived, subtasks, enableEmailReminder, emailNotification, lastNotifiedTime, createdAt)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            task.id,
+            task.user_id,
+            task.title,
+            task.description || '',
+            task.category || 'Work',
+            task.priority || 'medium',
+            task.status || 'to_do',
+            task.dueDate || '',
+            task.dueTime || '09:00',
+            task.recurrence || 'none',
+            task.completed ? 1 : 0,
+            task.archived ? 1 : 0,
+            JSON.stringify(task.subtasks || []),
+            (task.enableEmailReminder || task.emailNotification) ? 1 : 0,
+            (task.emailNotification || task.enableEmailReminder) ? 1 : 0,
+            task.lastNotifiedTime || null,
+            task.createdAt || new Date().toISOString()
+          );
+        }
+      }
+
+      if (Array.isArray(data.categories)) {
+        for (const category of data.categories) {
+          sqliteDb.prepare(`
+            INSERT OR IGNORE INTO categories (id, user_id, name, color)
+            VALUES (?, ?, ?, ?)
+          `).run(
+            category.id,
+            category.user_id,
+            category.name,
+            category.color || '#6366f1'
+          );
+        }
+      }
+
+      if (Array.isArray(data.feedback)) {
+        for (const fb of data.feedback) {
+          sqliteDb.prepare(`
+            INSERT OR IGNORE INTO feedback (id, user_email, subject, message, appVersion, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+          `).run(
+            fb.id,
+            fb.user_email || 'anonymous@user.app',
+            fb.subject,
+            fb.message,
+            fb.appVersion || 'v2.0.0-prod',
+            fb.created_at || new Date().toISOString()
+          );
+        }
+      }
+    });
+
+    migrateTx();
+    console.log('[Migration] Migration from JSON to SQLite completed successfully. Original taskpulse_db.json file left untouched.');
   } catch (err) {
-    console.error('[Database Error] Failed to write database file', err);
+    console.error('[Migration Error] Failed to migrate taskpulse_db.json into SQLite:', err);
   }
 }
 
-let dbState = loadDatabase();
+migrateJsonDataIfNeeded();
 
 export const db = {
   // Users
   findUserByEmail(email) {
     if (!email) return null;
-    return dbState.users.find(u => u.email.toLowerCase() === email.toLowerCase()) || null;
+    const row = sqliteDb.prepare('SELECT * FROM users WHERE LOWER(email) = LOWER(?)').get(email);
+    return formatUser(row);
   },
 
   findUserById(id) {
-    return dbState.users.find(u => u.id === id) || null;
+    if (!id) return null;
+    const row = sqliteDb.prepare('SELECT * FROM users WHERE id = ?').get(id);
+    return formatUser(row);
   },
 
   findUserByResetToken(token) {
-    return dbState.users.find(u => u.reset_token === token && u.reset_token_expires > Date.now()) || null;
+    if (!token) return null;
+    const row = sqliteDb.prepare('SELECT * FROM users WHERE reset_token = ? AND reset_token_expires > ?').get(token, Date.now());
+    return formatUser(row);
   },
 
   findUserByVerificationToken(token) {
     if (!token) return null;
-    return dbState.users.find(u => u.verification_token === token) || null;
+    const row = sqliteDb.prepare('SELECT * FROM users WHERE verification_token = ?').get(token);
+    return formatUser(row);
   },
 
   createUser(user) {
-    dbState.users.push(user);
-    saveDatabase(dbState);
-    return user;
+    sqliteDb.prepare(`
+      INSERT INTO users (id, name, email, password_hash, avatar, provider, email_verified, verification_token, reset_token, reset_token_expires, theme_preference, role, created_at, updated_at, last_login)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      user.id,
+      user.name,
+      user.email,
+      user.password_hash || null,
+      user.avatar || null,
+      user.provider || 'email',
+      user.email_verified ? 1 : 0,
+      user.verification_token || null,
+      user.reset_token || null,
+      user.reset_token_expires || null,
+      user.theme_preference || 'dark',
+      user.role || 'user',
+      user.created_at || new Date().toISOString(),
+      user.updated_at || new Date().toISOString(),
+      user.last_login || new Date().toISOString()
+    );
+    return this.findUserById(user.id);
   },
 
   updateUser(id, updates) {
-    const idx = dbState.users.findIndex(u => u.id === id);
-    if (idx >= 0) {
-      dbState.users[idx] = { ...dbState.users[idx], ...updates };
-      saveDatabase(dbState);
-      return dbState.users[idx];
-    }
-    return null;
+    const current = this.findUserById(id);
+    if (!current) return null;
+    const merged = { ...current, ...updates };
+    sqliteDb.prepare(`
+      UPDATE users SET
+        name = ?, email = ?, password_hash = ?, avatar = ?, provider = ?,
+        email_verified = ?, verification_token = ?, reset_token = ?, reset_token_expires = ?,
+        theme_preference = ?, role = ?, updated_at = ?, last_login = ?
+      WHERE id = ?
+    `).run(
+      merged.name,
+      merged.email,
+      merged.password_hash || null,
+      merged.avatar || null,
+      merged.provider || 'email',
+      merged.email_verified ? 1 : 0,
+      merged.verification_token || null,
+      merged.reset_token || null,
+      merged.reset_token_expires || null,
+      merged.theme_preference || 'dark',
+      merged.role || 'user',
+      merged.updated_at || new Date().toISOString(),
+      merged.last_login || new Date().toISOString(),
+      id
+    );
+    return this.findUserById(id);
   },
 
   deleteUser(id) {
-    dbState.users = dbState.users.filter(u => u.id !== id);
-    dbState.tasks = dbState.tasks.filter(t => t.user_id !== id);
-    dbState.categories = dbState.categories.filter(c => c.user_id !== id);
-    saveDatabase(dbState);
+    const deleteTx = sqliteDb.transaction((userId) => {
+      sqliteDb.prepare('DELETE FROM users WHERE id = ?').run(userId);
+      sqliteDb.prepare('DELETE FROM tasks WHERE user_id = ?').run(userId);
+      sqliteDb.prepare('DELETE FROM categories WHERE user_id = ?').run(userId);
+    });
+    deleteTx(id);
   },
 
-  // Tasks (Enforces User Isolation)
+  // Tasks
   getTasks(userId) {
-    return dbState.tasks.filter(t => t.user_id === userId);
+    const rows = sqliteDb.prepare('SELECT * FROM tasks WHERE user_id = ? ORDER BY createdAt DESC').all(userId);
+    return rows.map(formatTask);
   },
 
   getTaskById(id, userId) {
-    return dbState.tasks.find(t => t.id === id && t.user_id === userId) || null;
+    const row = sqliteDb.prepare('SELECT * FROM tasks WHERE id = ? AND user_id = ?').get(id, userId);
+    return formatTask(row);
   },
 
   createTask(task) {
-    dbState.tasks.unshift(task);
-    saveDatabase(dbState);
-    return task;
+    sqliteDb.prepare(`
+      INSERT INTO tasks (id, user_id, title, description, category, priority, status, dueDate, dueTime, recurrence, completed, archived, subtasks, enableEmailReminder, emailNotification, lastNotifiedTime, createdAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      task.id,
+      task.user_id,
+      task.title,
+      task.description || '',
+      task.category || 'Work',
+      task.priority || 'medium',
+      task.status || 'to_do',
+      task.dueDate || '',
+      task.dueTime || '09:00',
+      task.recurrence || 'none',
+      task.completed ? 1 : 0,
+      task.archived ? 1 : 0,
+      JSON.stringify(task.subtasks || []),
+      (task.enableEmailReminder || task.emailNotification) ? 1 : 0,
+      (task.emailNotification || task.enableEmailReminder) ? 1 : 0,
+      task.lastNotifiedTime || null,
+      task.createdAt || new Date().toISOString()
+    );
+    return this.getTaskById(task.id, task.user_id);
   },
 
   updateTask(id, userId, updates) {
-    const idx = dbState.tasks.findIndex(t => t.id === id && t.user_id === userId);
-    if (idx >= 0) {
-      dbState.tasks[idx] = { ...dbState.tasks[idx], ...updates };
-      saveDatabase(dbState);
-      return dbState.tasks[idx];
-    }
-    return null;
+    const current = this.getTaskById(id, userId);
+    if (!current) return null;
+    const merged = { ...current, ...updates };
+    sqliteDb.prepare(`
+      UPDATE tasks SET
+        title = ?, description = ?, category = ?, priority = ?, status = ?,
+        dueDate = ?, dueTime = ?, recurrence = ?, completed = ?, archived = ?,
+        subtasks = ?, enableEmailReminder = ?, emailNotification = ?, lastNotifiedTime = ?
+      WHERE id = ? AND user_id = ?
+    `).run(
+      merged.title,
+      merged.description || '',
+      merged.category || 'Work',
+      merged.priority || 'medium',
+      merged.status || 'to_do',
+      merged.dueDate || '',
+      merged.dueTime || '09:00',
+      merged.recurrence || 'none',
+      merged.completed ? 1 : 0,
+      merged.archived ? 1 : 0,
+      JSON.stringify(merged.subtasks || []),
+      (merged.enableEmailReminder || merged.emailNotification) ? 1 : 0,
+      (merged.emailNotification || merged.enableEmailReminder) ? 1 : 0,
+      merged.lastNotifiedTime || null,
+      id,
+      userId
+    );
+    return this.getTaskById(id, userId);
   },
 
   deleteTask(id, userId) {
-    const initialLen = dbState.tasks.length;
-    dbState.tasks = dbState.tasks.filter(t => !(t.id === id && t.user_id === userId));
-    const deleted = dbState.tasks.length < initialLen;
-    if (deleted) saveDatabase(dbState);
-    return deleted;
+    const result = sqliteDb.prepare('DELETE FROM tasks WHERE id = ? AND user_id = ?').run(id, userId);
+    return result.changes > 0;
   },
 
   // Categories
   getCategories(userId) {
-    return dbState.categories.filter(c => c.user_id === userId);
+    return sqliteDb.prepare('SELECT id, user_id, name, color FROM categories WHERE user_id = ?').all(userId);
   },
 
   createCategory(category) {
-    dbState.categories.push(category);
-    saveDatabase(dbState);
+    sqliteDb.prepare(`
+      INSERT INTO categories (id, user_id, name, color)
+      VALUES (?, ?, ?, ?)
+    `).run(
+      category.id,
+      category.user_id,
+      category.name,
+      category.color || '#6366f1'
+    );
     return category;
   },
 
   // Feedback
   createFeedback(fb) {
-    dbState.feedback.unshift(fb);
-    saveDatabase(dbState);
+    sqliteDb.prepare(`
+      INSERT INTO feedback (id, user_email, subject, message, appVersion, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      fb.id,
+      fb.user_email || 'anonymous@user.app',
+      fb.subject,
+      fb.message,
+      fb.appVersion || 'v2.0.0-prod',
+      fb.created_at || new Date().toISOString()
+    );
     return fb;
   }
 };
 
-console.log('[Database] Pure JS Database Engine initialized at:', DB_FILE);
+console.log('[Database] SQLite Database Engine initialized at:', SQLITE_FILE);

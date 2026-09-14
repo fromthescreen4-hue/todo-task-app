@@ -9,13 +9,9 @@ export const emailService = {
   async sendEmail({ to, subject, html, text, type = 'general', token = null }) {
     const isProdEmailConfigured = Boolean(process.env.EMAIL_HOST || process.env.RESEND_API_KEY);
     const emailLogEntry = {
-      id: 'email_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
       to,
       subject,
-      text,
-      html,
       type,
-      token,
       timestamp: new Date().toISOString()
     };
 

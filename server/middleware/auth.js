@@ -1,7 +1,13 @@
 import jwt from 'jsonwebtoken';
+import dotenv from 'dotenv';
 import { db } from '../db.js';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'taskpulse_production_jwt_secret_key_2026';
+dotenv.config();
+
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET || JWT_SECRET.length < 32) {
+  throw new Error('JWT_SECRET environment variable must be set to a strong random value (32+ chars).');
+}
 
 export function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];

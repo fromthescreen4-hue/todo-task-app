@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import { db } from './db.js';
 import { authenticateToken, requireAdmin, JWT_SECRET } from './middleware/auth.js';
 import { authRateLimiter } from './middleware/rateLimiter.js';
@@ -13,7 +14,8 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-app.use(cors());
+const allowedOrigin = process.env.FRONTEND_URL || 'http://localhost:5173';
+app.use(cors({ origin: allowedOrigin, credentials: true }));
 app.use(express.json());
 
 // Apply rate limiter to auth endpoints
@@ -30,11 +32,6 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Dev Email Simulator Endpoint (For local testing without real SMTP)
-app.get('/api/dev/emails', (req, res) => {
-  res.json(emailService.getSentEmailLogs());
-});
-
 // 2. Google OAuth Account Sign-In / Sign-Up / Account Linking
 app.post('/api/auth/google', async (req, res) => {
   try {
@@ -48,8 +45,8 @@ app.post('/api/auth/google', async (req, res) => {
 
     if (!user) {
       // Create new user account from Google Profile
-      const userId = googleId ? `google_${googleId}` : `usr_${Date.now()}`;
-      const dummyPasswordHash = await bcrypt.hash(`google_oauth_${Date.now()}_${Math.random()}`, 10);
+      const userId = googleId ? `google_${googleId}` : crypto.randomUUID();
+      const dummyPasswordHash = await bcrypt.hash(`google_oauth_${crypto.randomUUID()}`, 10);
       const createdAt = new Date().toISOString();
 
       user = {
@@ -150,7 +147,7 @@ app.post('/api/auth/register', async (req, res) => {
       return res.status(409).json({ error: 'An account with this email address already exists. Please log in or use Google Sign-In.' });
     }
 
-    const userId = 'usr_' + Date.now();
+    const userId = crypto.randomUUID();
     const passwordHash = await bcrypt.hash(password, 10);
     const verificationToken = Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit code
     const createdAt = new Date().toISOString();
@@ -447,7 +444,7 @@ app.post('/api/tasks', authenticateToken, (req, res) => {
     const { title, description, category, priority, dueDate, dueTime, recurrence, subtasks, emailNotification, enableEmailReminder } = req.body;
     if (!title || !title.trim()) return res.status(400).json({ error: 'Task title is required' });
 
-    const taskId = 'task_' + Date.now();
+    const taskId = crypto.randomUUID();
     const createdAt = new Date().toISOString();
     const isEmailOptedIn = Boolean(emailNotification ?? enableEmailReminder ?? false);
 
@@ -533,7 +530,7 @@ app.post('/api/categories', authenticateToken, (req, res) => {
     const { name, color } = req.body;
     if (!name || !name.trim()) return res.status(400).json({ error: 'Category name is required' });
 
-    const newCat = { id: 'cat_' + Date.now(), user_id: req.user.id, name: name.trim(), color: color || '#6366f1' };
+    const newCat = { id: crypto.randomUUID(), user_id: req.user.id, name: name.trim(), color: color || '#6366f1' };
     db.createCategory(newCat);
     res.status(201).json(newCat);
   } catch (err) {
@@ -548,7 +545,7 @@ app.post('/api/feedback', (req, res) => {
     if (!subject || !message) return res.status(400).json({ error: 'Subject and message are required' });
 
     const newFb = {
-      id: 'fb_' + Date.now(),
+      id: crypto.randomUUID(),
       user_email: email || 'anonymous@user.app',
       subject: subject.trim(),
       message: message.trim(),

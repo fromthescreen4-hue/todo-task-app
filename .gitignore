@@ -16,6 +16,8 @@ dist-ssr/
 .env.production
 .env.local
 server/*.db
+server/*.sqlite
+server/database.sqlite
 server/taskpulse_db.json
 server/taskpulse.db
 
