@@ -1,0 +1,26 @@
+# Logs & Debug
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Node modules & dependencies
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Production Environment Variables & Database Files
+.env
+.env.production
+.env.local
+server/*.db
+server/taskpulse_db.json
+server/taskpulse.db
+
+# OS / Editor Files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
