@@ -7,7 +7,9 @@ import {
   Zap,
   Moon,
   Sun,
-  MessageSquarePlus
+  MessageSquarePlus,
+  WifiOff,
+  ServerOff
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -17,11 +19,14 @@ export default function Header({
   onOpenEmailSimulator, 
   onOpenCommandPalette,
   onOpenFeedbackModal,
+  onOpenOfflineModal,
   searchQuery,
   setSearchQuery,
   unreadCount,
   isDarkMode,
-  setIsDarkMode
+  setIsDarkMode,
+  isOnline = true,
+  apiConnected = true
 }) {
   const today = new Date();
   const dayNumber = format(today, 'd');
@@ -63,6 +68,18 @@ export default function Header({
         {/* Header Right Actions */}
         <div className="flex items-center gap-2">
           
+          {/* Network Connection Warning Badge */}
+          {(!isOnline || !apiConnected) && (
+            <button
+              onClick={onOpenOfflineModal}
+              title={!isOnline ? "Network Disconnected — Click for Diagnostics" : "Server Connection Lost — Working Offline"}
+              className="px-2.5 py-1.5 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-500 text-xs font-bold flex items-center gap-1.5 hover:bg-rose-500/20 transition-all cursor-pointer animate-pulse"
+            >
+              {!isOnline ? <WifiOff className="w-3.5 h-3.5" /> : <ServerOff className="w-3.5 h-3.5" />}
+              <span className="hidden sm:inline">{!isOnline ? 'Offline' : 'Server Disconnected'}</span>
+            </button>
+          )}
+
           {/* Feedback & Report Problem Button */}
           <button
             onClick={onOpenFeedbackModal}

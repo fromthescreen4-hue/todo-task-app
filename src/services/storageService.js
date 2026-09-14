@@ -24,20 +24,13 @@ const DEFAULT_TASKS = [];
 
 export const storageService = {
   getTasks() {
-    try {
-      const data = localStorage.getItem(STORAGE_KEYS.TASKS);
-      return data ? JSON.parse(data) : DEFAULT_TASKS;
-    } catch {
-      return DEFAULT_TASKS;
-    }
+    return [];
   },
 
-  saveTasks(tasks) {
+  saveTasks() {
     try {
-      localStorage.setItem(STORAGE_KEYS.TASKS, JSON.stringify(tasks));
-    } catch (err) {
-      console.error('Failed to save tasks to LocalStorage', err);
-    }
+      localStorage.removeItem(STORAGE_KEYS.TASKS);
+    } catch (err) {}
   },
 
   getCategories() {

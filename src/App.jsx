@@ -14,14 +14,25 @@ import IntegrationsModal from './components/IntegrationsModal';
 import FeedbackModal from './components/FeedbackModal';
 
 import SplashScreen from './components/SplashScreen';
+import OfflineErrorPage from './components/OfflineErrorPage';
 import { storageService } from './services/storageService';
 import { notificationService } from './services/notificationService';
 import { shareService } from './services/shareService';
 import { apiClient } from './services/apiClient';
 import { cloudBackupService } from './services/cloudBackupService';
 
+const liveSyncChannel = typeof window !== 'undefined' && 'BroadcastChannel' in window
+  ? new BroadcastChannel('dothis_account_live_sync')
+  : null;
+
 export default function App() {
   const [showSplash, setShowSplash] = useState(true);
+
+  // Network Connectivity State
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [isOfflineModalOpen, setIsOfflineModalOpen] = useState(false);
+  const [reconnectToastMsg, setReconnectToastMsg] = useState('');
+  const [isLocalOfflineMode, setIsLocalOfflineMode] = useState(false);
 
   // State - Persistent User Session State
   const [user, setUser] = useState(() => {
@@ -29,10 +40,10 @@ export default function App() {
     return cached?.isLoggedIn ? cached : { isLoggedIn: false };
   });
 
-  const [tasks, setTasks] = useState(() => storageService.getTasks());
+  const [tasks, setTasks] = useState([]);
   const [categories, setCategories] = useState(() => storageService.getCategories());
   const [isDarkMode, setIsDarkMode] = useState(false);
-  const [apiConnected, setApiConnected] = useState(false);
+  const [apiConnected, setApiConnected] = useState(true);
 
   // Active Tab: 'tasks' | 'kanban' | 'calendar' | 'analytics'
   const [activeTab, setActiveTab] = useState('tasks');
@@ -50,6 +61,57 @@ export default function App() {
   const [isIntegrationsOpen, setIsIntegrationsOpen] = useState(false);
   const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
 
+  // Helper to notify multi-tab broadcast sync
+  const notifyBroadcastSync = () => {
+    try {
+      if (liveSyncChannel) {
+        liveSyncChannel.postMessage({ type: 'ACCOUNT_TASK_MUTATED', timestamp: Date.now() });
+      }
+    } catch (e) {}
+  };
+
+  // Helper to fetch live database tasks for registered user account
+  const fetchAccountTasksFromDB = async () => {
+    if (!apiClient.getToken()) return;
+    try {
+      const userTasks = await apiClient.getTasks();
+      if (Array.isArray(userTasks)) {
+        setTasks(userTasks);
+      }
+      const userCategories = await apiClient.getCategories();
+      if (Array.isArray(userCategories) && userCategories.length > 0) {
+        setCategories(userCategories);
+      }
+    } catch (e) {
+      console.warn('[Account DB Sync] Unable to fetch live user tasks from database:', e);
+    }
+  };
+
+  // Network Connectivity Event Listeners
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      setApiConnected(true);
+      setReconnectToastMsg('⚡ Network Connection Restored! Syncing workspace data...');
+      setIsOfflineModalOpen(false);
+      fetchAccountTasksFromDB();
+      setTimeout(() => setReconnectToastMsg(''), 4000);
+    };
+
+    const handleOffline = () => {
+      setIsOnline(false);
+      setIsOfflineModalOpen(true);
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
   // Session Initialization & Refresh Persistence
   useEffect(() => {
     async function initSession() {
@@ -61,8 +123,7 @@ export default function App() {
           setIsDarkMode(cached.theme_preference === 'dark');
         }
         setApiConnected(true);
-        const storedTasks = storageService.getTasks();
-        if (Array.isArray(storedTasks)) setTasks(storedTasks);
+        fetchAccountTasksFromDB();
         return;
       }
 
@@ -79,10 +140,11 @@ export default function App() {
             }
             storageService.saveUser(authUser);
             setApiConnected(true);
+            fetchAccountTasksFromDB();
             return;
           }
         } catch (err) {
-          console.warn('[Cloud Sync Warning] Using cached local session.');
+          console.warn('[Cloud Sync Warning] Failed to verify user token.');
         }
       }
 
@@ -94,13 +156,43 @@ export default function App() {
     initSession();
   }, []);
 
-  // Save State to LocalStorage Backup
+  // Fast Live Background Polling & Multi-Tab Broadcast Sync Effect
   useEffect(() => {
-    if (user?.isLoggedIn) {
-      storageService.saveTasks(tasks);
-      cloudBackupService.saveBackupTasks(tasks);
+    if (!user?.isLoggedIn) return;
+
+    fetchAccountTasksFromDB();
+
+    // Fast poll SQLite database every 3 seconds for instant multi-device live sync
+    const livePollInterval = setInterval(() => {
+      fetchAccountTasksFromDB();
+    }, 3000);
+
+    // Tab visibility / Window focus trigger
+    const handleFocusSync = () => {
+      fetchAccountTasksFromDB();
+    };
+    window.addEventListener('focus', handleFocusSync);
+    document.addEventListener('visibilitychange', handleFocusSync);
+
+    // Multi-tab BroadcastChannel listener
+    const handleBroadcastMessage = (event) => {
+      if (event.data?.type === 'ACCOUNT_TASK_MUTATED') {
+        fetchAccountTasksFromDB();
+      }
+    };
+    if (liveSyncChannel) {
+      liveSyncChannel.addEventListener('message', handleBroadcastMessage);
     }
-  }, [tasks, user]);
+
+    return () => {
+      clearInterval(livePollInterval);
+      window.removeEventListener('focus', handleFocusSync);
+      document.removeEventListener('visibilitychange', handleFocusSync);
+      if (liveSyncChannel) {
+        liveSyncChannel.removeEventListener('message', handleBroadcastMessage);
+      }
+    };
+  }, [user?.isLoggedIn]);
 
   useEffect(() => {
     if (user?.isLoggedIn) {
@@ -201,24 +293,30 @@ export default function App() {
 
     try {
       const userTasks = await apiClient.getTasks();
-      if (Array.isArray(userTasks) && userTasks.length > 0) {
+      if (Array.isArray(userTasks)) {
         setTasks(userTasks);
-        cloudBackupService.saveBackupTasks(userTasks);
+      }
+      const userCats = await apiClient.getCategories();
+      if (Array.isArray(userCats) && userCats.length > 0) {
+        setCategories(userCats);
       }
     } catch (e) {
-      console.warn('Using local backup storage');
+      console.warn('[Login Sync] Failed to load database tasks');
     }
+    notifyBroadcastSync();
   };
 
   const handleLogout = () => {
     apiClient.setToken(null);
     storageService.saveUser({ isLoggedIn: false });
     setUser({ isLoggedIn: false });
+    setTasks([]);
     setApiConnected(false);
     setIsAuthModalOpen(true);
+    notifyBroadcastSync();
   };
 
-  // Task Actions with Real-time Cloud Auto-Sync & Backup Failover
+  // Instant Database Mutations with Real-time Cloud Auto-Sync
   const handleToggleComplete = async (id) => {
     const target = tasks.find(t => t.id === id);
     if (!target) return;
@@ -231,18 +329,27 @@ export default function App() {
     try {
       await apiClient.updateTask(id, { ...target, completed: newCompleted, status: newStatus });
     } catch (e) {
-      cloudBackupService.enqueuePendingAction({ type: 'updateTask', id, data: { completed: newCompleted, status: newStatus } });
+      console.error('[Instant Save Error] Failed to update task completion in database', e);
     }
+    notifyBroadcastSync();
   };
 
-  const handleToggleSubtask = (taskId, subtaskId) => {
-    setTasks(prev => prev.map(t => {
-      if (t.id !== taskId) return t;
-      const updatedSubtasks = (t.subtasks || []).map(st => 
-        st.id === subtaskId ? { ...st, completed: !st.completed } : st
-      );
-      return { ...t, subtasks: updatedSubtasks };
-    }));
+  const handleToggleSubtask = async (taskId, subtaskId) => {
+    const target = tasks.find(t => t.id === taskId);
+    if (!target) return;
+
+    const updatedSubtasks = (target.subtasks || []).map(st => 
+      st.id === subtaskId ? { ...st, completed: !st.completed } : st
+    );
+
+    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, subtasks: updatedSubtasks } : t));
+
+    try {
+      await apiClient.updateTask(taskId, { ...target, subtasks: updatedSubtasks });
+    } catch (e) {
+      console.error('[Instant Save Error] Failed to update subtasks in database', e);
+    }
+    notifyBroadcastSync();
   };
 
   const handleSaveTask = async (taskData) => {
@@ -250,9 +357,12 @@ export default function App() {
     if (existingIdx >= 0) {
       setTasks(prev => prev.map((t, idx) => idx === existingIdx ? taskData : t));
       try {
-        await apiClient.updateTask(taskData.id, taskData);
+        const updated = await apiClient.updateTask(taskData.id, taskData);
+        if (updated?.task) {
+          setTasks(prev => prev.map(t => t.id === taskData.id ? updated.task : t));
+        }
       } catch (e) {
-        cloudBackupService.enqueuePendingAction({ type: 'updateTask', id: taskData.id, data: taskData });
+        console.error('[Instant Save Error] Failed to update task in database', e);
       }
     } else {
       setTasks(prev => [taskData, ...prev]);
@@ -262,9 +372,10 @@ export default function App() {
           setTasks(prev => prev.map(t => t.id === taskData.id ? created : t));
         }
       } catch (e) {
-        cloudBackupService.enqueuePendingAction({ type: 'createTask', data: taskData });
+        console.error('[Instant Save Error] Failed to create task in database', e);
       }
     }
+    notifyBroadcastSync();
   };
 
   const handleDeleteTask = async (id) => {
@@ -272,26 +383,43 @@ export default function App() {
     try {
       await apiClient.deleteTask(id);
     } catch (e) {
-      cloudBackupService.enqueuePendingAction({ type: 'deleteTask', id });
+      console.error('[Instant Save Error] Failed to delete task in database', e);
     }
+    notifyBroadcastSync();
   };
 
-  const handleArchiveTask = (id) => {
-    setTasks(prev => prev.map(t => t.id === id ? { ...t, archived: !t.archived } : t));
+  const handleArchiveTask = async (id) => {
+    const target = tasks.find(t => t.id === id);
+    if (!target) return;
+
+    const newArchived = !target.archived;
+    setTasks(prev => prev.map(t => t.id === id ? { ...t, archived: newArchived } : t));
+
+    try {
+      await apiClient.updateTask(id, { ...target, archived: newArchived });
+    } catch (e) {
+      console.error('[Instant Save Error] Failed to archive task in database', e);
+    }
+    notifyBroadcastSync();
   };
 
   const handleUpdateTaskStatus = async (id, newStatus) => {
+    const target = tasks.find(t => t.id === id);
+    if (!target) return;
+
+    const newCompleted = newStatus === 'completed';
     setTasks(prev => prev.map(t => t.id === id ? { 
       ...t, 
       status: newStatus, 
-      completed: newStatus === 'completed' 
+      completed: newCompleted 
     } : t));
 
     try {
-      await apiClient.updateTask(id, { status: newStatus, completed: newStatus === 'completed' });
+      await apiClient.updateTask(id, { ...target, status: newStatus, completed: newCompleted });
     } catch (e) {
-      cloudBackupService.enqueuePendingAction({ type: 'updateTask', id, data: { status: newStatus } });
+      console.error('[Instant Save Error] Failed to update task status in database', e);
     }
+    notifyBroadcastSync();
   };
 
   const handleImportTask = (newTask) => {
@@ -324,6 +452,13 @@ export default function App() {
       {/* Animated Splash Screen */}
       {showSplash && <SplashScreen onFinish={() => setShowSplash(false)} />}
 
+      {/* Reconnect Toast Banner */}
+      {reconnectToastMsg && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 bg-gradient-to-r from-emerald-500 to-teal-500 text-white font-bold text-xs rounded-2xl shadow-xl flex items-center gap-2 animate-fade-in border border-emerald-300/30">
+          <span>{reconnectToastMsg}</span>
+        </div>
+      )}
+
       {/* Mandatory Auth Gate: If unauthenticated, render Auth Modal Screen */}
       {!user?.isLoggedIn ? (
         <AuthModal
@@ -343,11 +478,14 @@ export default function App() {
             onOpenEmailSimulator={() => setIsEmailSimOpen(true)}
             onOpenCommandPalette={() => setIsCmdPaletteOpen(true)}
             onOpenFeedbackModal={() => setIsFeedbackModalOpen(true)}
+            onOpenOfflineModal={() => setIsOfflineModalOpen(true)}
             searchQuery={searchQuery}
             setSearchQuery={setSearchQuery}
             unreadCount={unreadCount}
             isDarkMode={isDarkMode}
             setIsDarkMode={handleToggleDarkMode}
+            isOnline={isOnline}
+            apiConnected={apiConnected}
           />
 
           {/* Main Workspace Screens */}
@@ -453,6 +591,21 @@ export default function App() {
             isOpen={isFeedbackModalOpen}
             onClose={() => setIsFeedbackModalOpen(false)}
             user={user}
+          />
+
+          <OfflineErrorPage
+            isOpen={isOfflineModalOpen || (!isOnline && !isLocalOfflineMode)}
+            onClose={() => setIsOfflineModalOpen(false)}
+            onRetryConnection={() => {
+              setIsOnline(true);
+              setApiConnected(true);
+            }}
+            isOffline={!isOnline}
+            isApiDown={!apiConnected}
+            onContinueOffline={() => {
+              setIsLocalOfflineMode(true);
+              setIsOfflineModalOpen(false);
+            }}
           />
         </>
       )}
