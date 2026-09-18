@@ -1,17 +1,36 @@
 import { storageService } from './storageService';
 import { cloudBackupService } from './cloudBackupService';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+export function getApiBaseUrl() {
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL;
+  }
+  if (typeof window !== 'undefined') {
+    const { protocol, hostname, port } = window.location;
+    // On dev server running on mobile LAN IP or custom port (e.g. 192.168.x.x:5173 or :3000)
+    if (port === '5173' || port === '3000' || port === '4173') {
+      return `${protocol}//${hostname}:5000/api`;
+    }
+    // On production deployment (e.g. Netlify or custom domain)
+    if (hostname !== 'localhost' && hostname !== '127.0.0.1') {
+      return `${window.location.origin}/api`;
+    }
+  }
+  return 'http://localhost:5000/api';
+}
+
+const API_BASE = getApiBaseUrl();
 const TOKEN_KEY = 'taskpulse_jwt_token';
 
 export const apiClient = {
   getToken() {
-    return localStorage.getItem(TOKEN_KEY);
+    const raw = localStorage.getItem(TOKEN_KEY);
+    return raw ? raw.trim() : null;
   },
 
   setToken(token) {
     if (token) {
-      localStorage.setItem(TOKEN_KEY, token);
+      localStorage.setItem(TOKEN_KEY, token.trim());
     } else {
       localStorage.removeItem(TOKEN_KEY);
     }
@@ -36,7 +55,10 @@ export const apiClient = {
       try {
         data = JSON.parse(text);
       } catch (jsonErr) {
-        throw new Error(`API endpoint ${API_BASE}${endpoint} returned HTML instead of JSON. Ensure backend API server is running on http://localhost:5000.`);
+        const syntaxErr = new Error(`API endpoint ${API_BASE}${endpoint} returned non-JSON response. Please ensure backend server is running.`);
+        syntaxErr.isNetworkError = true;
+        syntaxErr.apiUrl = API_BASE;
+        throw syntaxErr;
       }
 
       if (res.status === 401 || res.status === 403) {
@@ -57,8 +79,12 @@ export const apiClient = {
 
       return data;
     } catch (err) {
-      if (err.name === 'TypeError' && err.message.includes('fetch')) {
+      if (err.name === 'TypeError' && (err.message.includes('fetch') || err.message.includes('NetworkError') || err.message.includes('Failed'))) {
         console.warn(`[API Connection Error] Server endpoint ${API_BASE}${endpoint} unreachable.`);
+        const networkErr = new Error(`Failed to fetch: Unable to reach backend API (${API_BASE}). Please check your internet connection or server host.`);
+        networkErr.isNetworkError = true;
+        networkErr.apiUrl = API_BASE;
+        throw networkErr;
       }
       throw err;
     }

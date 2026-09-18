@@ -22,18 +22,28 @@ const allowedOrigins = allowedOriginsRaw
   .map(o => o.trim())
   .filter(Boolean);
 
-app.use(cors({
+const corsOptions = {
   origin: (origin, callback) => {
-    // Allow requests from all links, origins, subdomains, localhost ports, mobile apps, and server-to-server calls
-    if (!origin || allowedOrigins.includes('*') || allowedOrigins.includes(origin) || origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1')) {
+    // Allow requests without origin (curl, mobile native apps, postman, health checks)
+    if (!origin) return callback(null, true);
+
+    // Check allowlist, wildcard, localhost, local network IPs (192.168.x.x, 10.x.x.x, 172.x.x.x)
+    const isLocalIp = /^http:\/\/(192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+|localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+
+    if (allowedOrigins.includes('*') || allowedOrigins.includes(origin) || isLocalIp || origin.endsWith('.netlify.app')) {
       callback(null, true);
     } else {
-      // Dynamic fallback: allow any requesting origin for full multi-link accessibility
+      // Dynamic fallback: allow requesting origin for full multi-link & mobile accessibility
       callback(null, true);
     }
   },
-  credentials: true
-}));
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 app.use(express.json());
 
 // Apply rate limiter to auth endpoints

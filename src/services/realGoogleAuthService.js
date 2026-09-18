@@ -61,6 +61,8 @@ export const realGoogleAuthService = {
     if (initialized && window.google && window.google.accounts && window.google.accounts.id) {
       try {
         containerElement.innerHTML = '';
+        const containerWidth = containerElement.clientWidth || containerElement.offsetWidth || 280;
+        const targetWidth = Math.min(Math.max(containerWidth, 220), 300);
         window.google.accounts.id.renderButton(containerElement, {
           theme: 'outline',
           size: 'large',
@@ -68,7 +70,7 @@ export const realGoogleAuthService = {
           shape: 'pill',
           text: 'signin_with',
           logo_alignment: 'left',
-          width: 300
+          width: targetWidth
         });
         return true;
       } catch (e) {
