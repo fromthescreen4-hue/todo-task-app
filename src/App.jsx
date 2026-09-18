@@ -432,15 +432,14 @@ export default function App() {
     }
 
     const existingIdx = tasks.findIndex(t => t.id === taskData.id);
-    const pendingTask = { ...taskData, _isPending: true, _createdAtMs: Date.now() };
 
     if (existingIdx >= 0) {
-      setTasks(prev => prev.map((t, idx) => idx === existingIdx ? pendingTask : t));
       try {
-        const updated = await apiClient.updateTask(taskData.id, taskData);
-        if (updated?.task) {
-          const canonical = { ...updated.task, _isPending: false };
-          setTasks(prev => prev.map(t => (t.id === taskData.id || t.id === canonical.id) ? canonical : t));
+        const res = await apiClient.updateTask(taskData.id, taskData);
+        if (res?.task) {
+          setTasks(prev => prev.map(t => t.id === taskData.id ? res.task : t));
+        } else {
+          await fetchAccountTasksFromDB();
         }
         notifyBroadcastSync();
       } catch (e) {
@@ -452,12 +451,12 @@ export default function App() {
         }
       }
     } else {
-      setTasks(prev => [pendingTask, ...prev]);
       try {
         const created = await apiClient.createTask(taskData);
         if (created?.id) {
-          const canonical = { ...created, _isPending: false };
-          setTasks(prev => prev.map(t => (t.id === taskData.id || t.id === canonical.id) ? canonical : t));
+          setTasks(prev => [created, ...prev.filter(t => t.id !== created.id)]);
+        } else {
+          await fetchAccountTasksFromDB();
         }
         notifyBroadcastSync();
       } catch (e) {
@@ -473,9 +472,9 @@ export default function App() {
 
   const handleDeleteTask = async (id) => {
     const previousTasks = tasks;
-    setTasks(prev => prev.filter(t => t.id !== id));
     try {
       await apiClient.deleteTask(id);
+      setTasks(prev => prev.filter(t => t.id !== id));
       notifyBroadcastSync();
     } catch (e) {
       if (e?.isAuthError || e?.status === 401 || e?.status === 403) {
