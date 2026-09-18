@@ -3,8 +3,15 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+let __dirname = '.';
+try {
+  if (import.meta && import.meta.url && typeof import.meta.url === 'string' && import.meta.url.startsWith('file:')) {
+    const __filename = fileURLToPath(import.meta.url);
+    __dirname = path.dirname(__filename);
+  }
+} catch (e) {
+  __dirname = '.';
+}
 
 const SQLITE_FILE = path.join(__dirname, 'database.sqlite');
 const sqliteDb = new Database(SQLITE_FILE);
