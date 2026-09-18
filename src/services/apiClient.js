@@ -3,20 +3,18 @@ import { cloudBackupService } from './cloudBackupService';
 
 export function getApiBaseUrl() {
   if (import.meta.env.VITE_API_URL) {
-    return import.meta.env.VITE_API_URL;
+    const raw = import.meta.env.VITE_API_URL.trim().replace(/\/+$/, '');
+    return raw.endsWith('/api') ? raw : `${raw}/api`;
   }
   if (typeof window !== 'undefined') {
     const { protocol, hostname, port } = window.location;
-    // On dev server running on mobile LAN IP or custom port (e.g. 192.168.x.x:5173 or :3000)
+    // On dev server running locally on custom port (e.g. 5173, 3000, 4173)
     if (port === '5173' || port === '3000' || port === '4173') {
       return `${protocol}//${hostname}:5000/api`;
     }
-    // On production deployment (e.g. Netlify or custom domain)
-    if (hostname !== 'localhost' && hostname !== '127.0.0.1') {
-      return `${window.location.origin}/api`;
-    }
   }
-  return 'http://localhost:5000/api';
+  // Canonical Production API URL for both Netlify (do-this.netlify.app) and Cloudflare Worker (todo-task-app.dothis-v2.workers.dev)
+  return 'https://todo-task-app.dothis-v2.workers.dev/api';
 }
 
 const API_BASE = getApiBaseUrl();
@@ -47,18 +45,39 @@ export const apiClient = {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
+    const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+    const fullUrl = `${API_BASE}${cleanEndpoint}`;
+
     try {
-      const res = await fetch(`${API_BASE}${endpoint}`, { ...options, headers });
+      const res = await fetch(fullUrl, { ...options, headers });
+      const contentType = res.headers.get('content-type') || '';
       const text = await res.text();
+
+      // Section 14 — Safely verify Content-Type & body before parsing JSON
+      const isJson = contentType.includes('application/json') || (text.trim().startsWith('{') || text.trim().startsWith('['));
+
+      if (!isJson) {
+        if (import.meta.env.DEV) {
+          console.error(`[API Router Error] ${res.status} from ${fullUrl}. Unexpected non-JSON response.`);
+        }
+        const htmlErr = new Error('Backend returned an unexpected HTML response.');
+        htmlErr.isHtmlResponse = true;
+        htmlErr.status = res.status;
+        htmlErr.apiUrl = API_BASE;
+        throw htmlErr;
+      }
 
       let data;
       try {
         data = JSON.parse(text);
       } catch (jsonErr) {
-        const syntaxErr = new Error(`API endpoint ${API_BASE}${endpoint} returned non-JSON response. Please ensure backend server is running.`);
-        syntaxErr.isNetworkError = true;
-        syntaxErr.apiUrl = API_BASE;
-        throw syntaxErr;
+        if (import.meta.env.DEV) {
+          console.error(`[API JSON Parse Error] ${res.status} from ${fullUrl}`);
+        }
+        const parseErr = new Error('Backend returned an unexpected HTML response.');
+        parseErr.isHtmlResponse = true;
+        parseErr.status = res.status;
+        throw parseErr;
       }
 
       if (res.status === 401 || res.status === 403) {
@@ -73,15 +92,17 @@ export const apiClient = {
         throw authErr;
       }
 
-      if (!res.ok) {
+      if (!res.ok || data.success === false) {
         throw new Error(data.error || 'Request failed');
       }
 
       return data;
     } catch (err) {
       if (err.name === 'TypeError' && (err.message.includes('fetch') || err.message.includes('NetworkError') || err.message.includes('Failed'))) {
-        console.warn(`[API Connection Error] Server endpoint ${API_BASE}${endpoint} unreachable.`);
-        const networkErr = new Error(`Failed to fetch: Unable to reach backend API (${API_BASE}). Please check your internet connection or server host.`);
+        if (import.meta.env.DEV) {
+          console.error(`[API Network Error] Server endpoint ${fullUrl} unreachable.`);
+        }
+        const networkErr = new Error(`Failed to fetch: Unable to reach backend API (${API_BASE}). Please check your connection.`);
         networkErr.isNetworkError = true;
         networkErr.apiUrl = API_BASE;
         throw networkErr;

@@ -1,0 +1,5 @@
+# Proxy API requests to canonical Cloudflare Worker API backend
+/api/*  https://todo-task-app.dothis-v2.workers.dev/api/:splat  200!
+
+# Netlify SPA Fallback
+/*  /index.html  200

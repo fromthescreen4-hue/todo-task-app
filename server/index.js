@@ -15,7 +15,7 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-const defaultOrigins = 'http://localhost:5173,http://localhost:3000,http://localhost:5000,https://do-this.netlify.app';
+const defaultOrigins = 'http://localhost:5173,http://localhost:3000,http://localhost:5000,https://do-this.netlify.app,https://todo-task-app.dothis-v2.workers.dev';
 const allowedOriginsRaw = process.env.ALLOWED_ORIGINS || process.env.FRONTEND_URL || defaultOrigins;
 const allowedOrigins = allowedOriginsRaw
   .split(',')
@@ -24,22 +24,20 @@ const allowedOrigins = allowedOriginsRaw
 
 const corsOptions = {
   origin: (origin, callback) => {
-    // Allow requests without origin (curl, mobile native apps, postman, health checks)
+    // Allow requests without origin (curl, mobile native apps, health checks)
     if (!origin) return callback(null, true);
 
-    // Check allowlist, wildcard, localhost, local network IPs (192.168.x.x, 10.x.x.x, 172.x.x.x)
     const isLocalIp = /^http:\/\/(192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+|localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
 
-    if (allowedOrigins.includes('*') || allowedOrigins.includes(origin) || isLocalIp || origin.endsWith('.netlify.app')) {
-      callback(null, true);
+    if (allowedOrigins.includes(origin) || isLocalIp || origin.endsWith('.netlify.app') || origin.endsWith('.workers.dev')) {
+      callback(null, origin);
     } else {
-      // Dynamic fallback: allow requesting origin for full multi-link & mobile accessibility
-      callback(null, true);
+      callback(null, origin);
     }
   },
   credentials: true,
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
 };
 
 app.use(cors(corsOptions));
@@ -70,7 +68,7 @@ function broadcastUserEvent(userId, eventType, data = {}) {
 app.get('/api/sync/stream', (req, res) => {
   const token = req.query.token || (req.headers.authorization && req.headers.authorization.split(' ')[1]);
   if (!token) {
-    return res.status(401).json({ error: 'Token missing for SSE stream' });
+    return res.status(401).json({ success: false, error: 'Token missing for SSE stream' });
   }
 
   try {
@@ -102,16 +100,17 @@ app.get('/api/sync/stream', (req, res) => {
       }
     });
   } catch (err) {
-    return res.status(403).json({ error: 'Invalid token for SSE stream' });
+    return res.status(403).json({ success: false, error: 'Invalid token for SSE stream' });
   }
 });
 
-// 1. Health Monitoring Endpoint
+// 1. Health Monitoring Endpoint (Canonical API Health)
 app.get('/api/health', (req, res) => {
-  res.json({
+  res.status(200).json({
+    ok: true,
+    service: 'todo-task-app-api',
     status: 'ok',
     version: '2.0.0-prod',
-    service: 'DoThis Production API Backend',
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV || 'production'
   });
@@ -720,6 +719,14 @@ app.post('/api/feedback', (req, res) => {
   } catch (err) {
     res.status(500).json({ error: 'Failed to submit feedback' });
   }
+});
+
+// Section 6: Catch-all 404 for unmatched /api/* routes (ALWAYS return JSON, NEVER index.html)
+app.all('/api/*', (req, res) => {
+  res.status(404).json({
+    success: false,
+    error: 'API route not found'
+  });
 });
 
 // Central Production Error Monitoring Handler (No internal stack traces leaked)
