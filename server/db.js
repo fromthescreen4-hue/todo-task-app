@@ -449,6 +449,11 @@ export const db = {
     return result.changes > 0;
   },
 
+  clearUserTasks(userId) {
+    const result = sqliteDb.prepare('DELETE FROM tasks WHERE user_id = ?').run(userId);
+    return result.changes;
+  },
+
   // Categories
   getCategories(userId) {
     return sqliteDb.prepare('SELECT id, user_id, name, color FROM categories WHERE user_id = ?').all(userId);

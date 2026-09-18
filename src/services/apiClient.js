@@ -250,6 +250,10 @@ export const apiClient = {
     return this.request(`/tasks/${id}`, { method: 'DELETE' });
   },
 
+  async resetUserTasks() {
+    return this.request('/tasks/reset', { method: 'DELETE' });
+  },
+
   // Categories Methods
   async getCategories() {
     return this.request('/categories');

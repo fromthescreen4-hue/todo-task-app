@@ -20,17 +20,28 @@ const DEFAULT_CATEGORIES = [
   { id: 'cat_events', name: 'Shared Events', color: '#38bdf8', icon: 'Calendar' }
 ];
 
+export const TASK_STORAGE_VERSION = 'database-v2';
+
 const DEFAULT_TASKS = [];
 
 export const storageService = {
+  purgeLegacyTaskCache() {
+    try {
+      localStorage.removeItem(STORAGE_KEYS.TASKS);
+      localStorage.removeItem(STORAGE_KEYS.ARCHIVED);
+      localStorage.removeItem('dothis_tasks_v1');
+      localStorage.removeItem('dothis_tasks_cache');
+      localStorage.setItem('dothis_storage_version', TASK_STORAGE_VERSION);
+    } catch (err) {}
+  },
+
   getTasks() {
+    this.purgeLegacyTaskCache();
     return [];
   },
 
   saveTasks() {
-    try {
-      localStorage.removeItem(STORAGE_KEYS.TASKS);
-    } catch (err) {}
+    this.purgeLegacyTaskCache();
   },
 
   getCategories() {

@@ -235,8 +235,8 @@ export async function handleWorkerFetch(request, env) {
         return jsonResponse(newTask, 201, corsHeaders);
       }
 
-      // 9. Update Task (PUT /api/tasks/:id)
-      if (pathname.startsWith('/api/tasks/') && request.method === 'PUT') {
+      // 9. Update Task (PUT / PATCH /api/tasks/:id)
+      if (pathname.startsWith('/api/tasks/') && (request.method === 'PUT' || request.method === 'PATCH')) {
         const decoded = verifyJwtToken(request.headers.get('Authorization'));
         if (!decoded) return jsonResponse({ success: false, error: 'Unauthorized' }, 401, corsHeaders);
         const taskId = pathname.replace('/api/tasks/', '');
@@ -247,7 +247,19 @@ export async function handleWorkerFetch(request, env) {
         return jsonResponse({ success: true, task: updated }, 200, corsHeaders);
       }
 
-      // 10. Delete Task (DELETE /api/tasks/:id)
+      // 10. Reset User Tasks (DELETE /api/tasks/reset)
+      if (pathname === '/api/tasks/reset' && (request.method === 'DELETE' || request.method === 'POST')) {
+        const decoded = verifyJwtToken(request.headers.get('Authorization'));
+        if (!decoded) return jsonResponse({ success: false, error: 'Unauthorized' }, 401, corsHeaders);
+        for (const [id, task] of memoryTasks.entries()) {
+          if (task.user_id === decoded.id) {
+            memoryTasks.delete(id);
+          }
+        }
+        return jsonResponse({ success: true, message: 'All user tasks reset cleanly' }, 200, corsHeaders);
+      }
+
+      // 11. Delete Task (DELETE /api/tasks/:id)
       if (pathname.startsWith('/api/tasks/') && request.method === 'DELETE') {
         const decoded = verifyJwtToken(request.headers.get('Authorization'));
         if (!decoded) return jsonResponse({ success: false, error: 'Unauthorized' }, 401, corsHeaders);

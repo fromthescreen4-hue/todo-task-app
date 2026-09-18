@@ -133,6 +133,15 @@ async function main() {
     }
   });
 
+  await runTest('Task Reset: clearUserTasks removes user tasks cleanly without deleting user account', () => {
+    const freshTaskId = `task_reset_${Date.now()}`;
+    db.createTask({ id: freshTaskId, user_id: testUserId, title: 'Temporary Reset Task' });
+    const count = db.clearUserTasks(testUserId);
+    if (count < 1) throw new Error('clearUserTasks failed to remove task.');
+    const remaining = db.getTasks(testUserId);
+    if (remaining.length > 0) throw new Error('Tasks still exist after clearUserTasks!');
+  });
+
   // Cleanup Test Data
   db.deleteUser(testUserId);
   db.deleteUser(userBId);

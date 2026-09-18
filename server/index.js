@@ -625,7 +625,7 @@ app.post('/api/tasks', authenticateToken, (req, res) => {
   }
 });
 
-app.put('/api/tasks/:id', authenticateToken, (req, res) => {
+const handleTaskUpdate = (req, res) => {
   try {
     const { id } = req.params;
     const isEmailOptedIn = Boolean(req.body.emailNotification ?? req.body.enableEmailReminder ?? false);
@@ -655,6 +655,19 @@ app.put('/api/tasks/:id', authenticateToken, (req, res) => {
     res.json({ message: 'Task updated successfully', task: updated });
   } catch (err) {
     res.status(500).json({ error: 'Failed to update task' });
+  }
+};
+
+app.put('/api/tasks/:id', authenticateToken, handleTaskUpdate);
+app.patch('/api/tasks/:id', authenticateToken, handleTaskUpdate);
+
+app.delete('/api/tasks/reset', authenticateToken, (req, res) => {
+  try {
+    const count = db.clearUserTasks(req.user.id);
+    broadcastUserEvent(req.user.id, 'TASKS_MUTATED', { action: 'reset' });
+    res.json({ success: true, message: `All tasks (${count}) cleared for user account cleanly`, count });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to reset task data' });
   }
 });
 
