@@ -32,7 +32,13 @@ export default function App() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [isOfflineModalOpen, setIsOfflineModalOpen] = useState(false);
   const [reconnectToastMsg, setReconnectToastMsg] = useState('');
+  const [errorToastMsg, setErrorToastMsg] = useState('');
   const [isLocalOfflineMode, setIsLocalOfflineMode] = useState(false);
+
+  const showErrorToast = (msg) => {
+    setErrorToastMsg(msg || "Couldn't save changes — check your connection");
+    setTimeout(() => setErrorToastMsg(''), 5000);
+  };
 
   // State - Persistent User Session State
   const [user, setUser] = useState(() => {
@@ -76,14 +82,26 @@ export default function App() {
     try {
       const userTasks = await apiClient.getTasks();
       if (Array.isArray(userTasks)) {
-        setTasks(userTasks);
+        setTasks(prev => {
+          const dbIds = new Set(userTasks.map(t => t.id));
+          const pendingInFlight = prev.filter(t => 
+            t._isPending && 
+            !dbIds.has(t.id) && 
+            (Date.now() - (t._createdAtMs || 0) < 15000)
+          );
+          return [...pendingInFlight, ...userTasks];
+        });
       }
       const userCategories = await apiClient.getCategories();
       if (Array.isArray(userCategories) && userCategories.length > 0) {
         setCategories(userCategories);
       }
     } catch (e) {
-      console.warn('[Account DB Sync] Unable to fetch live user tasks from database:', e);
+      if (e?.isAuthError || e?.status === 401 || e?.status === 403) {
+        handleLogout();
+      } else {
+        console.warn('[Account DB Sync] Unable to fetch live user tasks from database:', e);
+      }
     }
   };
 
@@ -112,22 +130,20 @@ export default function App() {
     };
   }, []);
 
-  // Session Initialization & Refresh Persistence
+  // Session Expiration Listener
+  useEffect(() => {
+    const handleAuthExpired = () => {
+      setUser({ isLoggedIn: false });
+      setTasks([]);
+      setIsAuthModalOpen(true);
+    };
+    window.addEventListener('dothis_auth_expired', handleAuthExpired);
+    return () => window.removeEventListener('dothis_auth_expired', handleAuthExpired);
+  }, []);
+
+  // Session Initialization & Database Session Verification
   useEffect(() => {
     async function initSession() {
-      // 1. Check cached session in LocalStorage
-      const cached = storageService.getUser();
-      if (cached && cached.isLoggedIn) {
-        setUser(cached);
-        if (cached.theme_preference) {
-          setIsDarkMode(cached.theme_preference === 'dark');
-        }
-        setApiConnected(true);
-        fetchAccountTasksFromDB();
-        return;
-      }
-
-      // 2. Check API token
       const token = apiClient.getToken();
       if (token) {
         try {
@@ -144,37 +160,54 @@ export default function App() {
             return;
           }
         } catch (err) {
-          console.warn('[Cloud Sync Warning] Failed to verify user token.');
+          console.warn('[Session Verification Failed] Backend token invalid or server unavailable:', err);
         }
       }
 
-      // If no active session exists -> Mandatory Auth Gate
+      // Do NOT trust cached localStorage session without revalidating against backend getMe()
+      apiClient.setToken(null);
+      storageService.saveUser({ isLoggedIn: false });
       setUser({ isLoggedIn: false });
+      setTasks([]);
       setIsAuthModalOpen(true);
     }
 
     initSession();
   }, []);
 
-  // Fast Live Background Polling & Multi-Tab Broadcast Sync Effect
+  // Instant Real-Time SSE Push, Polling & Multi-Tab Broadcast Sync Effect
   useEffect(() => {
     if (!user?.isLoggedIn) return;
 
     fetchAccountTasksFromDB();
 
-    // Fast poll SQLite database every 3 seconds for instant multi-device live sync
+    // 1. Instant Real-Time SSE Stream (<100ms Push across all devices logged into account)
+    const unsubscribeSSE = apiClient.subscribeToLiveSync((event) => {
+      if (
+        event.type === 'task.created' ||
+        event.type === 'task.updated' ||
+        event.type === 'task.deleted' ||
+        event.type === 'category.created' ||
+        event.type === 'TASKS_MUTATED' ||
+        event.type === 'CATEGORIES_MUTATED'
+      ) {
+        fetchAccountTasksFromDB();
+      }
+    });
+
+    // 2. Poll SQLite database every 3 seconds for secondary backup sync
     const livePollInterval = setInterval(() => {
       fetchAccountTasksFromDB();
     }, 3000);
 
-    // Tab visibility / Window focus trigger
+    // 3. Tab visibility / Window focus trigger
     const handleFocusSync = () => {
       fetchAccountTasksFromDB();
     };
     window.addEventListener('focus', handleFocusSync);
     document.addEventListener('visibilitychange', handleFocusSync);
 
-    // Multi-tab BroadcastChannel listener
+    // 4. Multi-tab BroadcastChannel listener
     const handleBroadcastMessage = (event) => {
       if (event.data?.type === 'ACCOUNT_TASK_MUTATED') {
         fetchAccountTasksFromDB();
@@ -185,6 +218,7 @@ export default function App() {
     }
 
     return () => {
+      unsubscribeSSE();
       clearInterval(livePollInterval);
       window.removeEventListener('focus', handleFocusSync);
       document.removeEventListener('visibilitychange', handleFocusSync);
@@ -321,92 +355,164 @@ export default function App() {
     const target = tasks.find(t => t.id === id);
     if (!target) return;
 
+    const previousTasks = tasks;
     const newCompleted = !target.completed;
     const newStatus = newCompleted ? 'completed' : 'to_do';
 
-    setTasks(prev => prev.map(t => t.id === id ? { ...t, completed: newCompleted, status: newStatus } : t));
+    // Consistent Rule: Completing parent task marks all subtasks completed
+    const updatedSubtasks = newCompleted 
+      ? (target.subtasks || []).map(st => ({ ...st, completed: true }))
+      : (target.subtasks || []);
+
+    const updatedTask = {
+      ...target,
+      completed: newCompleted,
+      status: newStatus,
+      subtasks: updatedSubtasks
+    };
+
+    setTasks(prev => prev.map(t => t.id === id ? updatedTask : t));
 
     try {
-      await apiClient.updateTask(id, { ...target, completed: newCompleted, status: newStatus });
+      await apiClient.updateTask(id, updatedTask);
+      notifyBroadcastSync();
     } catch (e) {
-      console.error('[Instant Save Error] Failed to update task completion in database', e);
+      if (e?.isAuthError || e?.status === 401 || e?.status === 403) {
+        handleLogout();
+      } else {
+        setTasks(previousTasks);
+        showErrorToast(e?.message || "Couldn't update task — check your connection");
+      }
     }
-    notifyBroadcastSync();
   };
 
   const handleToggleSubtask = async (taskId, subtaskId) => {
     const target = tasks.find(t => t.id === taskId);
     if (!target) return;
 
+    const previousTasks = tasks;
     const updatedSubtasks = (target.subtasks || []).map(st => 
       st.id === subtaskId ? { ...st, completed: !st.completed } : st
     );
 
-    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, subtasks: updatedSubtasks } : t));
+    // Consistent Rule: If all subtasks completed -> parent task automatically completes
+    const allCompleted = updatedSubtasks.length > 0 && updatedSubtasks.every(st => st.completed);
+    const newCompleted = allCompleted ? true : (target.completed && !allCompleted ? false : target.completed);
+    const newStatus = newCompleted ? 'completed' : (updatedSubtasks.some(st => st.completed) ? 'in_progress' : target.status);
+
+    const updatedTask = {
+      ...target,
+      subtasks: updatedSubtasks,
+      completed: newCompleted,
+      status: newStatus
+    };
+
+    setTasks(prev => prev.map(t => t.id === taskId ? updatedTask : t));
 
     try {
-      await apiClient.updateTask(taskId, { ...target, subtasks: updatedSubtasks });
+      await apiClient.updateTask(taskId, updatedTask);
+      notifyBroadcastSync();
     } catch (e) {
-      console.error('[Instant Save Error] Failed to update subtasks in database', e);
+      if (e?.isAuthError || e?.status === 401 || e?.status === 403) {
+        handleLogout();
+      } else {
+        setTasks(previousTasks);
+        showErrorToast(e?.message || "Couldn't update subtasks — check your connection");
+      }
     }
-    notifyBroadcastSync();
   };
 
   const handleSaveTask = async (taskData) => {
+    const previousTasks = tasks;
+    if (selectedCategory && taskData.category !== selectedCategory) {
+      setSelectedCategory(null);
+    }
+    if (activeFilter === 'archived' && !taskData.archived) {
+      setActiveFilter('all');
+    }
+
     const existingIdx = tasks.findIndex(t => t.id === taskData.id);
+    const pendingTask = { ...taskData, _isPending: true, _createdAtMs: Date.now() };
+
     if (existingIdx >= 0) {
-      setTasks(prev => prev.map((t, idx) => idx === existingIdx ? taskData : t));
+      setTasks(prev => prev.map((t, idx) => idx === existingIdx ? pendingTask : t));
       try {
         const updated = await apiClient.updateTask(taskData.id, taskData);
         if (updated?.task) {
-          setTasks(prev => prev.map(t => t.id === taskData.id ? updated.task : t));
+          const canonical = { ...updated.task, _isPending: false };
+          setTasks(prev => prev.map(t => (t.id === taskData.id || t.id === canonical.id) ? canonical : t));
         }
+        notifyBroadcastSync();
       } catch (e) {
-        console.error('[Instant Save Error] Failed to update task in database', e);
+        if (e?.isAuthError || e?.status === 401 || e?.status === 403) {
+          handleLogout();
+        } else {
+          setTasks(previousTasks);
+          showErrorToast(e?.message || "Couldn't save changes — check your connection");
+        }
       }
     } else {
-      setTasks(prev => [taskData, ...prev]);
+      setTasks(prev => [pendingTask, ...prev]);
       try {
         const created = await apiClient.createTask(taskData);
         if (created?.id) {
-          setTasks(prev => prev.map(t => t.id === taskData.id ? created : t));
+          const canonical = { ...created, _isPending: false };
+          setTasks(prev => prev.map(t => (t.id === taskData.id || t.id === canonical.id) ? canonical : t));
         }
+        notifyBroadcastSync();
       } catch (e) {
-        console.error('[Instant Save Error] Failed to create task in database', e);
+        if (e?.isAuthError || e?.status === 401 || e?.status === 403) {
+          handleLogout();
+        } else {
+          setTasks(previousTasks);
+          showErrorToast(e?.message || "Couldn't save task — check your connection");
+        }
       }
     }
-    notifyBroadcastSync();
   };
 
   const handleDeleteTask = async (id) => {
+    const previousTasks = tasks;
     setTasks(prev => prev.filter(t => t.id !== id));
     try {
       await apiClient.deleteTask(id);
+      notifyBroadcastSync();
     } catch (e) {
-      console.error('[Instant Save Error] Failed to delete task in database', e);
+      if (e?.isAuthError || e?.status === 401 || e?.status === 403) {
+        handleLogout();
+      } else {
+        setTasks(previousTasks);
+        showErrorToast(e?.message || "Couldn't delete task — check your connection");
+      }
     }
-    notifyBroadcastSync();
   };
 
   const handleArchiveTask = async (id) => {
     const target = tasks.find(t => t.id === id);
     if (!target) return;
 
+    const previousTasks = tasks;
     const newArchived = !target.archived;
     setTasks(prev => prev.map(t => t.id === id ? { ...t, archived: newArchived } : t));
 
     try {
       await apiClient.updateTask(id, { ...target, archived: newArchived });
+      notifyBroadcastSync();
     } catch (e) {
-      console.error('[Instant Save Error] Failed to archive task in database', e);
+      if (e?.isAuthError || e?.status === 401 || e?.status === 403) {
+        handleLogout();
+      } else {
+        setTasks(previousTasks);
+        showErrorToast(e?.message || "Couldn't archive task — check your connection");
+      }
     }
-    notifyBroadcastSync();
   };
 
   const handleUpdateTaskStatus = async (id, newStatus) => {
     const target = tasks.find(t => t.id === id);
     if (!target) return;
 
+    const previousTasks = tasks;
     const newCompleted = newStatus === 'completed';
     setTasks(prev => prev.map(t => t.id === id ? { 
       ...t, 
@@ -416,10 +522,15 @@ export default function App() {
 
     try {
       await apiClient.updateTask(id, { ...target, status: newStatus, completed: newCompleted });
+      notifyBroadcastSync();
     } catch (e) {
-      console.error('[Instant Save Error] Failed to update task status in database', e);
+      if (e?.isAuthError || e?.status === 401 || e?.status === 403) {
+        handleLogout();
+      } else {
+        setTasks(previousTasks);
+        showErrorToast(e?.message || "Couldn't update task status — check your connection");
+      }
     }
-    notifyBroadcastSync();
   };
 
   const handleImportTask = (newTask) => {
@@ -456,6 +567,13 @@ export default function App() {
       {reconnectToastMsg && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 bg-gradient-to-r from-emerald-500 to-teal-500 text-white font-bold text-xs rounded-2xl shadow-xl flex items-center gap-2 animate-fade-in border border-emerald-300/30">
           <span>{reconnectToastMsg}</span>
+        </div>
+      )}
+
+      {/* Error Toast Banner */}
+      {errorToastMsg && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 bg-gradient-to-r from-rose-500 to-amber-500 text-white font-bold text-xs rounded-2xl shadow-xl flex items-center gap-2 animate-fade-in border border-rose-300/30">
+          <span>⚠️ {errorToastMsg}</span>
         </div>
       )}
 
@@ -547,6 +665,7 @@ export default function App() {
             onSaveTask={handleSaveTask}
             editingTask={editingTask}
             categories={categories}
+            onOpenShare={(t) => setSharingTask(t)}
           />
 
           <ShareModal

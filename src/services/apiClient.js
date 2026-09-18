@@ -39,6 +39,18 @@ export const apiClient = {
         throw new Error(`API endpoint ${API_BASE}${endpoint} returned HTML instead of JSON. Ensure backend API server is running on http://localhost:5000.`);
       }
 
+      if (res.status === 401 || res.status === 403) {
+        this.setToken(null);
+        localStorage.removeItem('taskpulse_user_v2');
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('dothis_auth_expired'));
+        }
+        const authErr = new Error(data.error || 'Session expired or unauthorized. Please sign in again.');
+        authErr.isAuthError = true;
+        authErr.status = res.status;
+        throw authErr;
+      }
+
       if (!res.ok) {
         throw new Error(data.error || 'Request failed');
       }
@@ -46,61 +58,56 @@ export const apiClient = {
       return data;
     } catch (err) {
       if (err.name === 'TypeError' && err.message.includes('fetch')) {
-        console.warn(`[Cloud Backup Failover] Primary API endpoint ${API_BASE}${endpoint} unreachable.`);
+        console.warn(`[API Connection Error] Server endpoint ${API_BASE}${endpoint} unreachable.`);
       }
       throw err;
     }
   },
 
-  // Auth Methods
-  async loginWithGoogle(googleProfile) {
+  // SSE Live Sync Stream Subscription helper
+  subscribeToLiveSync(onMessage) {
+    const token = this.getToken();
+    if (!token) return () => {};
+
     try {
-      const data = await this.request('/auth/google', {
-        method: 'POST',
-        body: JSON.stringify(googleProfile)
-      });
-      this.setToken(data.token);
-      return data;
-    } catch (err) {
-      console.warn('[Google Auth Offline Failover] API backend unavailable. Creating local session.');
-      const offlineToken = `google_token_${Date.now()}`;
-      this.setToken(offlineToken);
-      return {
-        token: offlineToken,
-        user: {
-          id: googleProfile.googleId || `usr_${Date.now()}`,
-          name: googleProfile.name || googleProfile.email?.split('@')[0] || 'User',
-          email: googleProfile.email,
-          avatar: googleProfile.avatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${googleProfile.email}`,
-          role: 'user',
-          created_at: new Date().toISOString()
-        },
-        message: 'Signed in with local failover session'
+      const streamUrl = `${API_BASE}/sync/stream?token=${encodeURIComponent(token)}`;
+      const eventSource = new EventSource(streamUrl);
+
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (onMessage) onMessage(data);
+        } catch (e) {}
       };
+
+      return () => {
+        eventSource.close();
+      };
+    } catch (e) {
+      return () => {};
     }
   },
 
+  // Auth Methods
+  async loginWithGoogle(googleProfile) {
+    const idToken = typeof googleProfile === 'string' ? googleProfile : (googleProfile?.idToken || googleProfile?.credential || googleProfile?.token);
+    const body = idToken ? { idToken } : googleProfile;
+
+    const data = await this.request('/auth/google', {
+      method: 'POST',
+      body: JSON.stringify(body)
+    });
+    if (data.token) this.setToken(data.token);
+    return data;
+  },
+
   async register(name, email, password, confirmPassword) {
-    try {
-      const data = await this.request('/auth/register', {
-        method: 'POST',
-        body: JSON.stringify({ name, email, password, confirmPassword })
-      });
-      if (data.token) this.setToken(data.token);
-      return data;
-    } catch (err) {
-      if (err.message && err.message.includes('already exists')) {
-        throw err;
-      }
-      console.warn('[Offline Failover] Registering user in local offline storage mode.');
-      const localToken = `token_${Date.now()}`;
-      this.setToken(localToken);
-      return {
-        token: localToken,
-        user: { id: `usr_${Date.now()}`, name, email, provider: 'email', email_verified: false, role: 'user', created_at: new Date().toISOString() },
-        requiresVerification: true
-      };
-    }
+    const data = await this.request('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ name, email, password, confirmPassword })
+    });
+    if (data.token) this.setToken(data.token);
+    return data;
   },
 
   async verifyEmail(token, email = null) {
@@ -120,45 +127,16 @@ export const apiClient = {
   },
 
   async login(email, password) {
-    try {
-      const data = await this.request('/auth/login', {
-        method: 'POST',
-        body: JSON.stringify({ email, password })
-      });
-      if (data.token) this.setToken(data.token);
-      return data;
-    } catch (err) {
-      if (err.message && (err.message.includes('Invalid') || err.message.includes('Incorrect') || err.message.includes('verify'))) {
-        throw err;
-      }
-      console.warn('[Offline Failover] Logging in user in local offline storage mode.');
-      const localToken = `token_${Date.now()}`;
-      this.setToken(localToken);
-      return {
-        token: localToken,
-        user: { id: `usr_${Date.now()}`, name: email.split('@')[0], email, provider: 'email', email_verified: true, role: 'user', created_at: new Date().toISOString() }
-      };
-    }
+    const data = await this.request('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password })
+    });
+    if (data.token) this.setToken(data.token);
+    return data;
   },
 
   async getMe() {
-    try {
-      return await this.request('/auth/me');
-    } catch (err) {
-      console.warn('[Offline Failover] API server offline. Using local cached session.');
-      const token = this.getToken();
-      if (!token) return null;
-      
-      // Load actual cached user from localStorage
-      try {
-        const cachedUser = JSON.parse(localStorage.getItem('taskpulse_user_v2'));
-        if (cachedUser && cachedUser.email) {
-          return { user: cachedUser };
-        }
-      } catch (e) {}
-
-      return null;
-    }
+    return this.request('/auth/me');
   },
 
   async forgotPassword(email) {

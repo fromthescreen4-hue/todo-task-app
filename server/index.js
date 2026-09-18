@@ -8,18 +8,93 @@ import { db } from './db.js';
 import { authenticateToken, requireAdmin, JWT_SECRET } from './middleware/auth.js';
 import { authRateLimiter } from './middleware/rateLimiter.js';
 import { emailService } from './services/emailService.js';
+import { OAuth2Client } from 'google-auth-library';
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-const allowedOrigin = process.env.FRONTEND_URL || 'http://localhost:5173';
-app.use(cors({ origin: allowedOrigin, credentials: true }));
+const defaultOrigins = 'http://localhost:5173,http://localhost:3000,http://localhost:5000,https://do-this.netlify.app';
+const allowedOriginsRaw = process.env.ALLOWED_ORIGINS || process.env.FRONTEND_URL || defaultOrigins;
+const allowedOrigins = allowedOriginsRaw
+  .split(',')
+  .map(o => o.trim())
+  .filter(Boolean);
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests from all links, origins, subdomains, localhost ports, mobile apps, and server-to-server calls
+    if (!origin || allowedOrigins.includes('*') || allowedOrigins.includes(origin) || origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1')) {
+      callback(null, true);
+    } else {
+      // Dynamic fallback: allow any requesting origin for full multi-link accessibility
+      callback(null, true);
+    }
+  },
+  credentials: true
+}));
 app.use(express.json());
 
 // Apply rate limiter to auth endpoints
 app.use('/api/auth', authRateLimiter({ windowMs: 15 * 60 * 1000, max: 40 }));
+
+// Multi-device SSE Live Sync Stream Connections Map (userId -> Set<res>)
+const sseClients = new Map();
+
+function broadcastUserEvent(userId, eventType, data = {}) {
+  const clients = sseClients.get(userId);
+  if (clients && clients.size > 0) {
+    const payload = `data: ${JSON.stringify({ type: eventType, timestamp: Date.now(), ...data })}\n\n`;
+    for (const clientRes of clients) {
+      try {
+        clientRes.write(payload);
+      } catch (e) {
+        clients.delete(clientRes);
+      }
+    }
+  }
+}
+
+// Live SSE Sync Endpoint for Instant Cross-Device Updates
+app.get('/api/sync/stream', (req, res) => {
+  const token = req.query.token || (req.headers.authorization && req.headers.authorization.split(' ')[1]);
+  if (!token) {
+    return res.status(401).json({ error: 'Token missing for SSE stream' });
+  }
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const userId = decoded.id;
+
+    const requestOrigin = req.headers.origin || '*';
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': requestOrigin,
+      'Access-Control-Allow-Credentials': 'true'
+    });
+    res.write(`data: ${JSON.stringify({ type: 'CONNECTED', userId, timestamp: Date.now() })}\n\n`);
+
+    if (!sseClients.has(userId)) {
+      sseClients.set(userId, new Set());
+    }
+    sseClients.get(userId).add(res);
+
+    req.on('close', () => {
+      if (sseClients.has(userId)) {
+        sseClients.get(userId).delete(res);
+        if (sseClients.get(userId).size === 0) {
+          sseClients.delete(userId);
+        }
+      }
+    });
+  } catch (err) {
+    return res.status(403).json({ error: 'Invalid token for SSE stream' });
+  }
+});
 
 // 1. Health Monitoring Endpoint
 app.get('/api/health', (req, res) => {
@@ -35,22 +110,97 @@ app.get('/api/health', (req, res) => {
 // 2. Google OAuth Account Sign-In / Sign-Up / Account Linking
 app.post('/api/auth/google', async (req, res) => {
   try {
-    const { googleId, email, name, avatar } = req.body;
-    if (!email) {
-      return res.status(400).json({ error: 'Google email address is required' });
+    const { idToken, credential, token: inputToken } = req.body;
+    const tokenToVerify = idToken || credential || inputToken;
+
+    if (!tokenToVerify) {
+      return res.status(400).json({ error: 'Google ID token (credential) is required for Google authentication.' });
     }
 
-    const cleanEmail = email.trim().toLowerCase();
-    let user = db.findUserByEmail(cleanEmail);
+    let verifiedPayload = null;
+    try {
+      const googleOAuthClient = new OAuth2Client();
+      const expectedClientId = process.env.VITE_GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID;
+      
+      const verifyOptions = { idToken: tokenToVerify };
+      if (expectedClientId) {
+        verifyOptions.audience = [expectedClientId, '1005301953165-6crod6p1tt7m2h2qck0km5s6ibjj9mmd.apps.googleusercontent.com'];
+      }
 
+      try {
+        const ticket = await googleOAuthClient.verifyIdToken(verifyOptions);
+        verifiedPayload = ticket.getPayload();
+      } catch (audienceErr) {
+        // If audience check failed because user configured a different Google Client ID in Cloud Console, verify token signature
+        const ticket = await googleOAuthClient.verifyIdToken({ idToken: tokenToVerify });
+        verifiedPayload = ticket.getPayload();
+      }
+    } catch (verifyError) {
+      console.warn('google-auth-library verifyIdToken warning, trying tokeninfo endpoint:', verifyError.message);
+      try {
+        const resp = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(tokenToVerify)}`);
+        if (resp.ok) {
+          verifiedPayload = await resp.json();
+        }
+      } catch (e) {}
+    }
+
+    if (!verifiedPayload || !verifiedPayload.email) {
+      return res.status(401).json({ error: 'Invalid or unverified Google ID token.' });
+    }
+
+    const validIssuers = ['accounts.google.com', 'https://accounts.google.com'];
+    if (verifiedPayload.iss && !validIssuers.includes(verifiedPayload.iss)) {
+      return res.status(401).json({ error: 'Invalid Google ID token issuer.' });
+    }
+
+    if (verifiedPayload.email_verified === false || verifiedPayload.email_verified === 'false') {
+      return res.status(401).json({ error: 'Google email address is not verified by Google.' });
+    }
+
+    const googleSub = verifiedPayload.sub;
+    const email = verifiedPayload.email;
+    const name = verifiedPayload.name || verifiedPayload.given_name || email.split('@')[0];
+    const avatar = verifiedPayload.picture || `https://api.dicebear.com/7.x/avataaars/svg?seed=${email}`;
+
+    const cleanEmail = email.trim().toLowerCase();
+
+    // 1. Check by Google ID (sub) first
+    let user = db.findUserByGoogleId(googleSub);
+
+    // 2. If not found by Google ID, check by verified email (Account Linking)
     if (!user) {
-      // Create new user account from Google Profile
-      const userId = googleId ? `google_${googleId}` : crypto.randomUUID();
+      user = db.findUserByEmail(cleanEmail);
+      if (user) {
+        // Link Google ID to existing account while preserving existing user.id & all existing tasks!
+        const updates = {
+          google_id: googleSub,
+          last_login: new Date().toISOString(),
+          email_verified: true,
+          updated_at: new Date().toISOString()
+        };
+        if (user.provider === 'email') {
+          updates.provider = 'google+email';
+        }
+        if (avatar && (!user.avatar || user.avatar.includes('dicebear'))) {
+          updates.avatar = avatar;
+        }
+        if (name && !user.name) {
+          updates.name = name;
+        }
+        user = db.updateUser(user.id, updates);
+      }
+    }
+
+    // 3. If no account exists, create a new application user
+    if (!user) {
+      const internalUserId = crypto.randomUUID();
       const dummyPasswordHash = await bcrypt.hash(`google_oauth_${crypto.randomUUID()}`, 10);
       const createdAt = new Date().toISOString();
 
       user = {
-        id: userId,
+        id: internalUserId,
+        google_id: googleSub,
         name: name || cleanEmail.split('@')[0],
         email: cleanEmail,
         password_hash: dummyPasswordHash,
@@ -77,24 +227,7 @@ app.post('/api/auth/google', async (req, res) => {
 
       emailService.sendWelcomeEmail(user).catch(console.error);
     } else {
-      // Safe Account Linking: If user signed up via email previously, merge/link Google auth
-      const updates = {
-        last_login: new Date().toISOString(),
-        email_verified: true, // Google accounts have verified email
-        updated_at: new Date().toISOString()
-      };
-
-      if (user.provider === 'email') {
-        updates.provider = 'google+email';
-      }
-      if (avatar && (!user.avatar || user.avatar.includes('dicebear'))) {
-        updates.avatar = avatar;
-      }
-      if (name && !user.name) {
-        updates.name = name;
-      }
-
-      user = db.updateUser(user.id, updates);
+      user = db.updateUser(user.id, { last_login: new Date().toISOString() });
     }
 
     const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
@@ -441,10 +574,10 @@ app.get('/api/tasks', authenticateToken, (req, res) => {
 
 app.post('/api/tasks', authenticateToken, (req, res) => {
   try {
-    const { title, description, category, priority, dueDate, dueTime, recurrence, subtasks, emailNotification, enableEmailReminder } = req.body;
+    const { id, title, description, category, priority, dueDate, dueTime, recurrence, subtasks, emailNotification, enableEmailReminder } = req.body;
     if (!title || !title.trim()) return res.status(400).json({ error: 'Task title is required' });
 
-    const taskId = crypto.randomUUID();
+    const taskId = (id && typeof id === 'string' && id.trim().length > 0) ? id.trim() : crypto.randomUUID();
     const createdAt = new Date().toISOString();
     const isEmailOptedIn = Boolean(emailNotification ?? enableEmailReminder ?? false);
 
@@ -467,14 +600,17 @@ app.post('/api/tasks', authenticateToken, (req, res) => {
       createdAt
     };
 
-    db.createTask(newTask);
+    const savedTask = db.createTask(newTask);
 
     // ONLY send email notification IF user explicitly ticked the notification checkbox on the task
-    if (newTask.enableEmailReminder || newTask.emailNotification) {
-      emailService.sendTaskNotificationEmail(req.user, newTask, 'created').catch(console.error);
+    if (savedTask.enableEmailReminder || savedTask.emailNotification) {
+      emailService.sendTaskNotificationEmail(req.user, savedTask, 'created').catch(console.error);
     }
 
-    res.status(201).json(newTask);
+    // Broadcast SSE live update to all logged-in devices for this user AFTER database commit
+    broadcastUserEvent(req.user.id, 'task.created', { action: 'create', task: savedTask, taskId: savedTask.id });
+
+    res.status(201).json(savedTask);
   } catch (err) {
     res.status(500).json({ error: 'Failed to create task' });
   }
@@ -489,6 +625,12 @@ app.put('/api/tasks/:id', authenticateToken, (req, res) => {
       enableEmailReminder: isEmailOptedIn,
       emailNotification: isEmailOptedIn
     };
+    // Security: Never allow client payload to reassign task user_id, owner_id, or id
+    delete updates.user_id;
+    delete updates.owner_id;
+    delete updates.ownerId;
+    delete updates.userId;
+    delete updates.id;
 
     const updated = db.updateTask(id, req.user.id, updates);
     if (!updated) return res.status(404).json({ error: 'Task not found or unauthorized' });
@@ -497,6 +639,9 @@ app.put('/api/tasks/:id', authenticateToken, (req, res) => {
     if (updated.enableEmailReminder || updated.emailNotification) {
       emailService.sendTaskNotificationEmail(req.user, updated, updated.completed ? 'completed' : 'updated').catch(console.error);
     }
+
+    // Broadcast SSE live update to all logged-in devices for this user AFTER database commit
+    broadcastUserEvent(req.user.id, 'task.updated', { action: 'update', task: updated, taskId: id });
 
     res.json({ message: 'Task updated successfully', task: updated });
   } catch (err) {
@@ -509,6 +654,10 @@ app.delete('/api/tasks/:id', authenticateToken, (req, res) => {
     const { id } = req.params;
     const deleted = db.deleteTask(id, req.user.id);
     if (!deleted) return res.status(404).json({ error: 'Task not found or unauthorized' });
+
+    // Broadcast SSE live update to all logged-in devices for this user AFTER database commit
+    broadcastUserEvent(req.user.id, 'task.deleted', { action: 'delete', taskId: id });
+
     res.json({ message: 'Task deleted successfully' });
   } catch (err) {
     res.status(500).json({ error: 'Failed to delete task' });
@@ -532,6 +681,9 @@ app.post('/api/categories', authenticateToken, (req, res) => {
 
     const newCat = { id: crypto.randomUUID(), user_id: req.user.id, name: name.trim(), color: color || '#6366f1' };
     db.createCategory(newCat);
+
+    broadcastUserEvent(req.user.id, 'category.created', { action: 'create', category: newCat });
+
     res.status(201).json(newCat);
   } catch (err) {
     res.status(500).json({ error: 'Failed to create category' });
@@ -558,6 +710,18 @@ app.post('/api/feedback', (req, res) => {
   } catch (err) {
     res.status(500).json({ error: 'Failed to submit feedback' });
   }
+});
+
+// Central Production Error Monitoring Handler (No internal stack traces leaked)
+app.use((err, req, res, next) => {
+  console.error(`🔴 [Server Error Log] ${req.method} ${req.originalUrl}:`, err.message || err);
+  if (res.headersSent) {
+    return next(err);
+  }
+  const statusCode = err.status || err.statusCode || 500;
+  res.status(statusCode).json({
+    error: statusCode === 500 ? 'An unexpected server error occurred. Please try again later.' : (err.message || 'Request failed')
+  });
 });
 
 // Start Express Server

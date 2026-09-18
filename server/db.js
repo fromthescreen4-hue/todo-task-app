@@ -9,13 +9,16 @@ const __dirname = path.dirname(__filename);
 const SQLITE_FILE = path.join(__dirname, 'database.sqlite');
 const sqliteDb = new Database(SQLITE_FILE);
 
-// Enable WAL mode for high concurrency and performance
+// Enable PRAGMAs for high concurrency, performance, and relational integrity
 sqliteDb.pragma('journal_mode = WAL');
+sqliteDb.pragma('foreign_keys = ON');
+sqliteDb.pragma('busy_timeout = 5000');
 
 // Initialize Database Tables
 sqliteDb.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id TEXT PRIMARY KEY,
+    google_id TEXT UNIQUE,
     name TEXT,
     email TEXT UNIQUE NOT NULL,
     password_hash TEXT,
@@ -50,6 +53,8 @@ sqliteDb.exec(`
     emailNotification INTEGER DEFAULT 0,
     lastNotifiedTime TEXT,
     createdAt TEXT,
+    updated_at TEXT,
+    version INTEGER DEFAULT 1,
     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
   );
 
@@ -69,6 +74,32 @@ sqliteDb.exec(`
     appVersion TEXT,
     created_at TEXT
   );
+
+  CREATE INDEX IF NOT EXISTS idx_tasks_user_id ON tasks(user_id);
+  CREATE INDEX IF NOT EXISTS idx_categories_user_id ON categories(user_id);
+`);
+
+// Auto-migration for schema upgrades (Idempotent & non-destructive)
+try {
+  const userCols = sqliteDb.pragma('table_info(users)').map(c => c.name);
+  if (!userCols.includes('google_id')) {
+    sqliteDb.exec('ALTER TABLE users ADD COLUMN google_id TEXT');
+  }
+
+  const taskCols = sqliteDb.pragma('table_info(tasks)').map(c => c.name);
+  if (!taskCols.includes('updated_at')) {
+    sqliteDb.exec('ALTER TABLE tasks ADD COLUMN updated_at TEXT');
+  }
+  if (!taskCols.includes('version')) {
+    sqliteDb.exec('ALTER TABLE tasks ADD COLUMN version INTEGER DEFAULT 1');
+  }
+} catch (e) {
+  console.warn('[DB Migration Warning]', e.message);
+}
+
+// Create indices after table migrations
+sqliteDb.exec(`
+  CREATE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id);
 `);
 
 // Formatter Helpers
@@ -76,6 +107,7 @@ function formatUser(row) {
   if (!row) return null;
   return {
     id: row.id,
+    google_id: row.google_id || null,
     name: row.name,
     email: row.email,
     password_hash: row.password_hash,
@@ -118,7 +150,9 @@ function formatTask(row) {
     enableEmailReminder: Boolean(row.enableEmailReminder),
     emailNotification: Boolean(row.emailNotification),
     lastNotifiedTime: row.lastNotifiedTime,
-    createdAt: row.createdAt
+    createdAt: row.createdAt || row.created_at,
+    updated_at: row.updated_at || row.createdAt || new Date().toISOString(),
+    version: row.version || 1
   };
 }
 
@@ -242,6 +276,12 @@ export const db = {
     return formatUser(row);
   },
 
+  findUserByGoogleId(googleId) {
+    if (!googleId) return null;
+    const row = sqliteDb.prepare('SELECT * FROM users WHERE google_id = ?').get(googleId);
+    return formatUser(row);
+  },
+
   findUserByResetToken(token) {
     if (!token) return null;
     const row = sqliteDb.prepare('SELECT * FROM users WHERE reset_token = ? AND reset_token_expires > ?').get(token, Date.now());
@@ -256,10 +296,11 @@ export const db = {
 
   createUser(user) {
     sqliteDb.prepare(`
-      INSERT INTO users (id, name, email, password_hash, avatar, provider, email_verified, verification_token, reset_token, reset_token_expires, theme_preference, role, created_at, updated_at, last_login)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO users (id, google_id, name, email, password_hash, avatar, provider, email_verified, verification_token, reset_token, reset_token_expires, theme_preference, role, created_at, updated_at, last_login)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       user.id,
+      user.google_id || null,
       user.name,
       user.email,
       user.password_hash || null,
@@ -284,11 +325,12 @@ export const db = {
     const merged = { ...current, ...updates };
     sqliteDb.prepare(`
       UPDATE users SET
-        name = ?, email = ?, password_hash = ?, avatar = ?, provider = ?,
+        google_id = ?, name = ?, email = ?, password_hash = ?, avatar = ?, provider = ?,
         email_verified = ?, verification_token = ?, reset_token = ?, reset_token_expires = ?,
         theme_preference = ?, role = ?, updated_at = ?, last_login = ?
       WHERE id = ?
     `).run(
+      merged.google_id || null,
       merged.name,
       merged.email,
       merged.password_hash || null,
@@ -328,9 +370,11 @@ export const db = {
   },
 
   createTask(task) {
+    const now = new Date().toISOString();
+    const version = task.version || 1;
     sqliteDb.prepare(`
-      INSERT INTO tasks (id, user_id, title, description, category, priority, status, dueDate, dueTime, recurrence, completed, archived, subtasks, enableEmailReminder, emailNotification, lastNotifiedTime, createdAt)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO tasks (id, user_id, title, description, category, priority, status, dueDate, dueTime, recurrence, completed, archived, subtasks, enableEmailReminder, emailNotification, lastNotifiedTime, createdAt, updated_at, version)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       task.id,
       task.user_id,
@@ -348,7 +392,9 @@ export const db = {
       (task.enableEmailReminder || task.emailNotification) ? 1 : 0,
       (task.emailNotification || task.enableEmailReminder) ? 1 : 0,
       task.lastNotifiedTime || null,
-      task.createdAt || new Date().toISOString()
+      task.createdAt || now,
+      task.updated_at || now,
+      version
     );
     return this.getTaskById(task.id, task.user_id);
   },
@@ -356,12 +402,17 @@ export const db = {
   updateTask(id, userId, updates) {
     const current = this.getTaskById(id, userId);
     if (!current) return null;
-    const merged = { ...current, ...updates };
+
+    const now = new Date().toISOString();
+    const nextVersion = (current.version || 1) + 1;
+    const merged = { ...current, ...updates, updated_at: now, version: nextVersion };
+
     sqliteDb.prepare(`
       UPDATE tasks SET
         title = ?, description = ?, category = ?, priority = ?, status = ?,
         dueDate = ?, dueTime = ?, recurrence = ?, completed = ?, archived = ?,
-        subtasks = ?, enableEmailReminder = ?, emailNotification = ?, lastNotifiedTime = ?
+        subtasks = ?, enableEmailReminder = ?, emailNotification = ?, lastNotifiedTime = ?,
+        updated_at = ?, version = ?
       WHERE id = ? AND user_id = ?
     `).run(
       merged.title,
@@ -378,6 +429,8 @@ export const db = {
       (merged.enableEmailReminder || merged.emailNotification) ? 1 : 0,
       (merged.emailNotification || merged.enableEmailReminder) ? 1 : 0,
       merged.lastNotifiedTime || null,
+      merged.updated_at,
+      merged.version,
       id,
       userId
     );

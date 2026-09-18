@@ -14,7 +14,8 @@ import {
   Tag, 
   Repeat,
   AlertCircle,
-  MessageSquare
+  MessageSquare,
+  ListChecks
 } from 'lucide-react';
 import { notificationService } from '../services/notificationService';
 import { googleCalendarService } from '../services/googleCalendarService';
@@ -28,7 +29,7 @@ export default function TaskCard({
   onArchive, 
   onShare 
 }) {
-  const [showSubtasks, setShowSubtasks] = useState(false);
+  const [isExpandedSubtasks, setIsExpandedSubtasks] = useState(false);
 
   const handleCheckboxClick = (e) => {
     e.stopPropagation();
@@ -36,7 +37,6 @@ export default function TaskCard({
     onToggleComplete(task.id);
 
     if (willBeCompleted) {
-      // Confetti burst!
       confetti({
         particleCount: 50,
         spread: 60,
@@ -66,7 +66,11 @@ export default function TaskCard({
   const dueStatus = getDueStatus();
   const subtasks = task.subtasks || [];
   const completedSubtasksCount = subtasks.filter(st => st.completed).length;
-  const subtasksProgress = subtasks.length > 0 ? (completedSubtasksCount / subtasks.length) * 100 : 0;
+  const subtasksProgress = subtasks.length > 0 ? Math.round((completedSubtasksCount / subtasks.length) * 100) : 0;
+
+  // By default, preview first 2 subtasks unless expanded
+  const visibleSubtasks = isExpandedSubtasks ? subtasks : subtasks.slice(0, 2);
+  const remainingSubtasksCount = subtasks.length - 2;
 
   return (
     <div className={`glass-panel glass-panel-hover rounded-2xl p-4 transition-all duration-200 ${
@@ -75,13 +79,13 @@ export default function TaskCard({
       
       <div className="flex items-start gap-3">
         
-        {/* Custom Checkbox */}
+        {/* Custom Main Task Checkbox */}
         <button
           onClick={handleCheckboxClick}
-          className={`mt-1 w-5 h-5 rounded-lg border flex items-center justify-center transition-all ${
+          className={`mt-1 w-5 h-5 rounded-lg border flex items-center justify-center transition-all shrink-0 ${
             task.completed 
               ? 'bg-gradient-to-r from-emerald-500 to-teal-500 border-emerald-400 text-white shadow-md shadow-emerald-500/30' 
-              : 'border-white/30 hover:border-indigo-400 bg-slate-800/60'
+              : 'border-white/30 hover:border-orange-400 bg-slate-800/60'
           }`}
         >
           {task.completed && <Check className="w-3.5 h-3.5 stroke-[3]" />}
@@ -97,7 +101,7 @@ export default function TaskCard({
             </h3>
 
             {/* Quick Actions */}
-            <div className="flex items-center gap-1 opacity-80 hover:opacity-100 transition-opacity">
+            <div className="flex items-center gap-1 opacity-80 hover:opacity-100 transition-opacity shrink-0">
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -116,7 +120,7 @@ export default function TaskCard({
 
               <button
                 onClick={() => onShare(task)}
-                title="Share Event Link"
+                title="Share Task Status Link"
                 className="p-1 hover:bg-white/10 rounded-lg text-slate-400 hover:text-sky-400 transition-colors"
               >
                 <Share2 className="w-3.5 h-3.5" />
@@ -187,68 +191,83 @@ export default function TaskCard({
                 <span className="capitalize">{task.recurrence}</span>
               </div>
             )}
-
-            {/* Attachments Indicator */}
-            {task.attachments && task.attachments.length > 0 && (
-              <div className="flex items-center gap-1 text-[10px] text-slate-400 bg-slate-800 px-1.5 py-0.5 rounded border border-white/5">
-                <Paperclip className="w-3 h-3" />
-                <span>{task.attachments.length}</span>
-              </div>
-            )}
-
-            {/* Shared Indicator */}
-            {task.isShared && (
-              <span className="flex items-center gap-1 text-[10px] text-sky-300 bg-sky-500/10 px-1.5 py-0.5 rounded border border-sky-500/20">
-                <Share2 className="w-3 h-3" /> Shared Link
-              </span>
-            )}
           </div>
 
-          {/* Subtasks Progress Bar & Toggle */}
+          {/* SUBTASKS HOMEPAGE AREA */}
           {subtasks.length > 0 && (
-            <div className="mt-3 pt-2 border-t border-white/5">
-              <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
-                <button
-                  onClick={() => setShowSubtasks(!showSubtasks)}
-                  className="flex items-center gap-1 hover:text-slate-200 transition-colors font-medium"
-                >
-                  <span>Subtasks ({completedSubtasksCount}/{subtasks.length})</span>
-                  {showSubtasks ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                </button>
-                <span className="text-[10px] font-bold">{Math.round(subtasksProgress)}%</span>
+            <div className="mt-3 pt-2.5 border-t border-white/5 space-y-2">
+              
+              {/* Header: Subtasks Progress Bar & Count */}
+              <div className="flex items-center justify-between text-xs">
+                <div className="flex items-center gap-1.5 font-semibold text-slate-300">
+                  <ListChecks className="w-3.5 h-3.5 text-orange-400" />
+                  <span>Subtasks</span>
+                </div>
+                <div className="flex items-center gap-1.5 text-[11px]">
+                  <span className="text-slate-400 font-medium">{completedSubtasksCount} / {subtasks.length}</span>
+                  <span className="font-extrabold text-orange-400">{subtasksProgress}%</span>
+                </div>
               </div>
 
               {/* Progress Bar */}
               <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
                 <div 
-                  className="h-full bg-gradient-to-r from-indigo-500 to-emerald-400 transition-all duration-300"
+                  className="h-full bg-gradient-to-r from-orange-500 via-rose-500 to-amber-400 transition-all duration-300"
                   style={{ width: `${subtasksProgress}%` }}
-                ></div>
+                />
               </div>
 
-              {/* Expanded Subtasks List */}
-              {showSubtasks && (
-                <div className="mt-2 space-y-1.5 pl-1 animate-fade-in">
-                  {subtasks.map(st => (
-                    <div 
-                      key={st.id} 
-                      onClick={() => onToggleSubtask(task.id, st.id)}
-                      className="flex items-center gap-2 text-xs text-slate-300 hover:text-white cursor-pointer group py-0.5"
-                    >
-                      <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-colors ${
-                        st.completed 
-                          ? 'bg-emerald-500 border-emerald-400 text-white' 
-                          : 'border-white/30 group-hover:border-indigo-400'
-                      }`}>
-                        {st.completed && <Check className="w-2.5 h-2.5 stroke-[3]" />}
-                      </div>
-                      <span className={st.completed ? 'line-through text-slate-500' : ''}>
-                        {st.title}
-                      </span>
+              {/* Homepage Quick-Check Subtask Items Preview */}
+              <div className="space-y-1 pt-1">
+                {visibleSubtasks.map(st => (
+                  <div 
+                    key={st.id}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onToggleSubtask(task.id, st.id);
+                    }}
+                    className="flex items-center gap-2 text-xs text-slate-300 hover:text-white cursor-pointer group py-1 px-1.5 rounded-lg hover:bg-white/5 transition-colors"
+                  >
+                    <div className={`w-3.5 h-3.5 rounded border flex items-center justify-center transition-colors shrink-0 ${
+                      st.completed 
+                        ? 'bg-gradient-to-r from-orange-500 to-amber-500 border-orange-400 text-white' 
+                        : 'border-white/30 group-hover:border-orange-400 bg-slate-800'
+                    }`}>
+                      {st.completed && <Check className="w-2.5 h-2.5 stroke-[3]" />}
                     </div>
-                  ))}
-                </div>
+                    <span className={`transition-all truncate text-[11px] ${
+                      st.completed ? 'line-through text-slate-500' : 'text-slate-200'
+                    }`}>
+                      {st.title}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Expand / Collapse Toggle if subtasks > 2 */}
+              {subtasks.length > 2 && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsExpandedSubtasks(!isExpandedSubtasks);
+                  }}
+                  className="text-[11px] font-bold text-orange-400 hover:text-orange-300 flex items-center gap-1 pt-0.5 hover:underline"
+                >
+                  {isExpandedSubtasks ? (
+                    <>
+                      <span>Show less</span>
+                      <ChevronUp className="w-3 h-3" />
+                    </>
+                  ) : (
+                    <>
+                      <span>+ {remainingSubtasksCount} more</span>
+                      <ChevronDown className="w-3 h-3" />
+                    </>
+                  )}
+                </button>
               )}
+
             </div>
           )}
 
