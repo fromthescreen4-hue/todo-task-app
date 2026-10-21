@@ -12,6 +12,9 @@ import {
   GoogleAuthProvider,
   signOut,
   sendPasswordResetEmail,
+  sendSignInLinkToEmail,
+  isSignInWithEmailLink,
+  signInWithEmailLink,
   updateProfile,
   onAuthStateChanged
 } from 'firebase/auth';
@@ -26,15 +29,15 @@ import { getAnalytics, isSupported as isAnalyticsSupported } from 'firebase/anal
 
 const CONFIG_STORAGE_KEY = 'corefit_firebase_config';
 
-// Active Firebase Project Configuration via Environment Variables
+// Active Firebase Project Configuration via Environment Variables & Production Fallbacks
 const DEFAULT_CONFIG = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || '',
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || '',
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || '',
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || '',
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '',
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || '',
-  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || ''
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || 'AIzaSyC3ih5XoiObmuFBUQRoN73ZbNa2punxMA0',
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || 'core-fit-1.firebaseapp.com',
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || 'core-fit-1',
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || 'core-fit-1.firebasestorage.app',
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '646084717752',
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || '1:646084717752:web:83da975d3b2c5d88bcd84d',
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID || 'G-LP16MEHHZY'
 };
 
 export function getStoredFirebaseConfig() {
@@ -185,6 +188,110 @@ export async function firebaseLoginGoogle() {
 export async function firebaseSendPasswordReset(email) {
   if (!auth) throw new Error('Password reset service unavailable. Please try again later.');
   return sendPasswordResetEmail(auth, email);
+}
+
+// ─── Firebase Email Link (Passwordless) Authentication ─────────────────────
+
+/**
+ * Sends a passwordless sign-in magic link to the athlete's email address.
+ * Follows: https://firebase.google.com/docs/auth/web/email-link-auth
+ */
+export async function firebaseSendSignInLink(email, customRedirectUrl = null) {
+  if (!isFirebaseConfigured()) {
+    initFirebase();
+  }
+  if (!auth) throw new Error('Authentication is initializing. Please try again in a moment.');
+
+  const cleanEmail = email.trim().toLowerCase();
+  
+  // Clean base URL without hash or query
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
+  const pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
+  const redirectUrl = customRedirectUrl || `${origin}${pathname}`;
+
+  const actionCodeSettings = {
+    url: redirectUrl,
+    handleCodeInApp: true,
+  };
+
+  await sendSignInLinkToEmail(auth, cleanEmail, actionCodeSettings);
+
+  // Persist email locally so we don't need to re-ask on the same device
+  if (typeof window !== 'undefined') {
+    window.localStorage.setItem('emailForSignIn', cleanEmail);
+  }
+
+  return { success: true, email: cleanEmail };
+}
+
+/**
+ * Checks whether the current URL contains a valid Firebase email sign-in link.
+ */
+export function firebaseIsSignInWithEmailLink(url = null) {
+  if (!isFirebaseConfigured()) {
+    initFirebase();
+  }
+  if (!auth) return false;
+  
+  const targetUrl = url || (typeof window !== 'undefined' ? window.location.href : '');
+  try {
+    return isSignInWithEmailLink(auth, targetUrl);
+  } catch (err) {
+    console.warn('[firebase] isSignInWithEmailLink check notice:', err.message);
+    return false;
+  }
+}
+
+/**
+ * Completes sign-in with the email link.
+ * If email is not passed and was stored in localStorage, it uses the stored email.
+ */
+export async function firebaseCompleteSignInWithEmailLink(email = null, url = null) {
+  if (!isFirebaseConfigured()) {
+    initFirebase();
+  }
+  if (!auth) throw new Error('Authentication is initializing. Please try again in a moment.');
+
+  const href = url || (typeof window !== 'undefined' ? window.location.href : '');
+
+  let emailToUse = email ? email.trim().toLowerCase() : null;
+  if (!emailToUse && typeof window !== 'undefined') {
+    emailToUse = window.localStorage.getItem('emailForSignIn');
+  }
+
+  if (!emailToUse) {
+    const error = new Error('EMAIL_CONFIRMATION_REQUIRED');
+    error.code = 'auth/email-confirmation-required';
+    throw error;
+  }
+
+  const result = await signInWithEmailLink(auth, emailToUse, href);
+
+  // Clear stored email & clean up URL query params
+  if (typeof window !== 'undefined') {
+    window.localStorage.removeItem('emailForSignIn');
+    try {
+      const cleanUrl = window.location.origin + window.location.pathname + window.location.hash;
+      window.history.replaceState({}, document.title, cleanUrl);
+    } catch {}
+  }
+
+  const user = result.user;
+  const userRecord = {
+    uid: user.uid,
+    email: user.email,
+    displayName: user.displayName || user.email.split('@')[0],
+    provider: 'firebase_email_link',
+    createdAt: new Date().toISOString()
+  };
+
+  try {
+    await saveUserToCloud(user.uid, { profile: userRecord });
+  } catch (err) {
+    console.warn('[firebase] Initial cloud doc sync notice:', err.message);
+  }
+
+  return userRecord;
 }
 
 export async function firebaseLogout() {

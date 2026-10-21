@@ -1,5 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { getSettings, getAuthUser, saveAuthUser } from './services/db';
+import {
+  firebaseIsSignInWithEmailLink,
+  firebaseCompleteSignInWithEmailLink
+} from './services/firebase';
 
 // Navigation & Layout
 import Sidebar from './components/Sidebar';
@@ -61,6 +65,23 @@ export default function App() {
       window.removeEventListener('hashchange', handleLocationChange);
       window.removeEventListener('popstate', handleLocationChange);
     };
+  }, []);
+
+  // Auto-detect incoming Firebase Email Sign-in link
+  useEffect(() => {
+    if (typeof window !== 'undefined' && firebaseIsSignInWithEmailLink(window.location.href)) {
+      const savedEmail = window.localStorage.getItem('emailForSignIn');
+      if (savedEmail) {
+        firebaseCompleteSignInWithEmailLink(savedEmail)
+          .then((userRecord) => {
+            saveAuthUser(userRecord);
+            setAuthUser(userRecord);
+          })
+          .catch((err) => {
+            console.error('[auth] Auto email link sign-in error:', err);
+          });
+      }
+    }
   }, []);
 
   function handleLogout() {
