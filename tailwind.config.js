@@ -4,32 +4,34 @@ export default {
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
   ],
-  darkMode: 'class',
   theme: {
     extend: {
-      borderRadius: {
-        '2xl': '20px',
-        '3xl': '24px',
-        '4xl': '32px'
+      fontFamily: {
+        sans: ['Plus Jakarta Sans', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
       },
       colors: {
-        pastel: {
-          bg: '#f3f2f8',
-          card: '#ffffff',
-          teal: '#2dd4bf',
-          indigo: '#6366f1',
-          coral: '#fb7185',
-          orange: '#f97316',
-          purple: '#c084fc',
-          mint: '#a7f3d0',
-          yellow: '#fde047'
-        }
+        brand: {
+          50: '#FFFDF5',
+          100: '#FFF8E7',
+          200: '#FDE68A',
+          300: '#FCD34D',
+          400: '#FFBF1F',
+          500: '#FFAE00',
+          600: '#F09B00',
+          700: '#D97706',
+          800: '#92400E',
+          900: '#78350F',
+        },
+      },
+      borderRadius: {
+        card: '16px',
+        btn:  '12px',
       },
       boxShadow: {
-        'pastel': '0 12px 32px -4px rgba(112, 107, 144, 0.08), 0 4px 12px -2px rgba(112, 107, 144, 0.04)',
-        'pastel-hover': '0 16px 40px -4px rgba(112, 107, 144, 0.14)',
-        'orange-glow': '0 10px 25px rgba(249, 115, 22, 0.45)'
-      }
+        card:   '0 4px 20px rgba(0, 0, 0, 0.04)',
+        accent: '0 4px 16px rgba(255, 174, 0, 0.28)',
+        modal:  '0 20px 60px rgba(0, 0, 0, 0.12)',
+      },
     },
   },
   plugins: [],

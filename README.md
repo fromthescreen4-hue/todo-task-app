@@ -1,168 +1,58 @@
-# DO THIS — Production Task & Cloud Sync Suite
+# CORE FIT: Production-Ready Fitness Web App
 
-**DO THIS** is a modern, high-performance multi-device productivity application built with React, Vite, Tailwind CSS, Express, and SQLite database storage (`better-sqlite3`).
-
----
-
-## 🔒 Production Security & Architecture
-
-```text
-Google / Identity Provider
-          ↓
-Cryptographically Signed ID Token
-          ↓
-Server Verification (google-auth-library OAuth2Client.verifyIdToken)
-          ↓
-Canonical Application User (users.google_id link)
-          ↓
-Internal Application User ID (users.id)
-          ↓
-Session JWT (Authorization: Bearer <token>)
-          ↓
-Authenticated REST API (Express + PRAGMA foreign_keys = ON)
-          ↓
-SQLite Database (database.sqlite with WAL mode)
-          ↓
-Strict Task Ownership (WHERE user_id = authenticated user.id)
-```
+**Tagline:** Build Strength From Within  
+**Brand Identity:** Minimal, editorial, precise, premium, performance-focused  
+**Palette:** White (`#FFFFFF`), Charcoal Black (`#15171A`), Signature CORE FIT Red (`#E50914`), Neutral Borders (`#D9DDE2`)  
+**Target:** Mobile-first responsive web application with full desktop sidebar support and offline PWA capability.
 
 ---
 
-## 🌟 Key Architectural Guarantees
+## 1. Overview & Architectural Principles
 
-1. **Cryptographic Google Token Verification**:
-   - Google authentication uses official Google Identity Services (GIS) ID token credentials.
-   - `POST /api/auth/google` verifies the ID token server-side using `google-auth-library` (`OAuth2Client.verifyIdToken`).
-   - Unverified identity claims, raw emails, or client-crafted payloads are rejected with `HTTP 401`.
+CORE FIT is an engineered, production-ready fitness tracking platform built without fabricated demo metrics, synthetic AI placeholders, or purple gradient templates. 
 
-2. **Canonical Account Linking & Internal Identity**:
-   - The system maintains a distinct separation between external Google `sub` identity (`users.google_id`) and internal application user ID (`users.id`).
-   - When a user logs in with Google using a verified email matching an existing account, the Google identity (`google_id`) is linked to their existing application account.
-   - **Internal `users.id` is preserved**, keeping all pre-existing tasks, categories, and workspace data intact under `tasks.user_id = user.id`.
-
-3. **Strict Server-Side Task Ownership Isolation**:
-   - `POST /api/tasks` assigns `task.user_id = req.user.id` from the verified server JWT. Any client-supplied `user_id` or `owner_id` fields are stripped.
-   - `GET /api/tasks` queries SQLite `WHERE user_id = req.user.id`.
-   - `PUT /api/tasks/:id` and `DELETE /api/tasks/:id` enforce `WHERE id = ? AND user_id = req.user.id`, preventing cross-user task modification or deletion.
-
-4. **Database as Single Source of Truth**:
-   - All tasks are stored in SQLite (`server/database.sqlite`) with WAL mode (`journal_mode = WAL`), foreign keys enabled (`PRAGMA foreign_keys = ON`), and busy timeout protection (`PRAGMA busy_timeout = 5000`).
-   - Tasks are synced across devices in real time via Server-Sent Events (`/api/sync/stream`) and background polling.
-
-5. **Multi-Origin CORS Protection**:
-   - Configurable `ALLOWED_ORIGINS` environment variable handles comma-separated frontend origins. Offending origins are logged server-side on rejection.
+- **Local-First & Data Sovereignty:** Biometric records, workout volume, food logs, and progress photos are stored persistently and privately inside the browser sandbox (LocalStorage + IndexedDB). Zero unsolicited surveillance sync.
+- **ICMR-NIN Regional Food Database:** Comprehensive nutrition composition covering authentic South Indian staples (Idli, Sambar, Dosa, Puttu, Kadala Curry, Appam & Stew, Idiyappam, Upma, Matta Rice, Thoran, Kerala Fish Curry, Porotta), North/Wider Indian foods, and Wider Asian dishes with exact Indian household serving units (Katori, Piece, Bowl, Plate).
+- **Biomechanical Exercise Education:** 11 workout disciplines with detailed anatomical cues (Stance, Grip, Valsalva Breathing, Common Biomechanical Faults) accompanied by animated vector bar paths.
+- **Deterministic Targets:** Caloric and macronutrient recommendations calculated using transparent Harris-Benedict BMR and TDEE formulas based on user biometric inputs.
 
 ---
 
-## 🛠️ Local Setup & Development
+## 2. 12 Functional Modules
 
-### 1. Prerequisites
-- Node.js 18 or higher installed on your system.
+1. **Home Dashboard:** Daily step count with progress bar, activity calorie estimates, body weight trend, weekly workout adherence, today's meal summary, hydration progress, verified milestones, and quick action buttons.
+2. **Movement & Step Tracking:** Daily steps, editable step goal, active minutes, estimated calories, distance calculation, manual cardio logs (Walking, Running, Cycling, HIIT), and integration architecture.
+3. **Weight & Body Composition:** Weigh-in logging with date and time, kg/lbs conversion toggle, starting/current/target weight, period charts (7d, 30d, 90d, 180d, 365d, all), body measurements (waist, chest, hips), and private IndexedDB progress photo vault.
+4. **Nutrition & Regional Food Diary:** Searchable database with regional alias lookup, cuisine filters (South Indian, Wider Indian, High Protein, Wider Asian), meal breakdown (Breakfast, Lunch, Dinner, Snacks), custom recipe/food creator, and real-time macro balance (Protein, Carbs, Fat, Fibre).
+5. **Gym Workout Library & Exercise Education:** 11 disciplines (Full Body, Upper, Lower, Push, Pull, Legs, Chest & Triceps, Back & Biceps, Shoulders, Arms, Core, Cardio, Mobility) with biomechanical SVG animations, execution cues, and 1-click addition to active sessions.
+6. **Active Workout Session & Stopwatch:** Live session stopwatch, sets/reps/load logging with check-off completion, progressive overload memory recalling previous session weights, and an integrated audio rest interval timer (30s, 60s, 90s, 120s, 180s).
+7. **Progress & Performance Reports:** Cumulative volume load tracking (Weight × Reps), frequency audit, verified personal records (PRs) table, and adherence metrics compiled strictly from real saved workouts.
+8. **Goals & Personalized Plan:** Objective selection (weight loss, muscle growth, endurance, health), transparent BMR/TDEE calculations, customizable macro splits, and customized weekly workout splits.
+9. **Water & Habit Tracking:** Hydration tracking with quick buttons (+250ml, +500ml, +750ml, +1000ml) and a daily wellness protocol checklist (8h sleep, steps, protein target, stretching, creatine/supplements).
+10. **Profile & Settings:** Biometrics management, unit switching (kg/lbs, cm/inches), notification toggles, complete encrypted JSON database export/import, and safe data wiping.
+11. **Authentication & Guided Onboarding:** Email/password authentication, Google Sign-In support, guest offline-first mode, password reset flow, and a 7-step guided onboarding wizard featuring the official CORE FIT logo asset.
+12. **Admin & Content Management:** Catalog manager for custom foods and custom exercises, sandbox storage footprint audit, and client diagnostic telemetry event logger.
 
-### 2. Install Dependencies
+---
+
+## 3. Running & Deployment
+
+### Quick Start
+Double-click `start-server.bat` in the project root, or execute:
+
 ```bash
+# Install dependencies
 npm install
-```
 
-### 3. Environment Configuration
-Copy `.env.example` to `.env`:
-```bash
-cp .env.example .env
-```
-
-Ensure `.env` contains your allowed origins and strong JWT secret:
-```env
-ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000,http://localhost:5000,https://do-this.netlify.app
-JWT_SECRET=your_super_secret_random_key_32chars_min
-PORT=5000
-VITE_GOOGLE_CLIENT_ID=1005301953165-6crod6p1tt7m2h2qck0km5s6ibjj9mmd.apps.googleusercontent.com
-```
-
-### 4. Running Dev Servers
-```bash
-# Terminal 1: Start Express API Backend (Port 5000)
-npm run server
-
-# Terminal 2: Start Vite Frontend (Port 3000)
+# Start Vite dev server on port 3000
 npm run dev
-```
 
-Open `http://localhost:3000` in your browser.
-
----
-
-## 🧪 Testing & Verification
-
-### Automated Hardening & Isolation Test Suite
-Run the automated test suite to verify database migrations, Google account linking, JWT verification, and cross-user task isolation:
-```bash
-node scripts/test-hardening.js
-```
-
-### Production Build
-```bash
+# Build production bundle
 npm run build
+
+# Preview production bundle
+npm run preview
 ```
 
----
-
-## 📄 Database Schema & Auto-Migration
-
-```sql
-CREATE TABLE IF NOT EXISTS users (
-  id TEXT PRIMARY KEY,
-  google_id TEXT UNIQUE,
-  name TEXT,
-  email TEXT UNIQUE NOT NULL,
-  password_hash TEXT,
-  avatar TEXT,
-  provider TEXT,
-  email_verified INTEGER DEFAULT 0,
-  verification_token TEXT,
-  reset_token TEXT,
-  reset_token_expires INTEGER,
-  theme_preference TEXT DEFAULT 'dark',
-  role TEXT DEFAULT 'user',
-  created_at TEXT,
-  updated_at TEXT,
-  last_login TEXT
-);
-
-CREATE TABLE IF NOT EXISTS tasks (
-  id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL,
-  title TEXT NOT NULL,
-  description TEXT,
-  category TEXT,
-  priority TEXT,
-  status TEXT,
-  dueDate TEXT,
-  dueTime TEXT,
-  recurrence TEXT,
-  completed INTEGER DEFAULT 0,
-  archived INTEGER DEFAULT 0,
-  subtasks TEXT,
-  enableEmailReminder INTEGER DEFAULT 0,
-  emailNotification INTEGER DEFAULT 0,
-  lastNotifiedTime TEXT,
-  createdAt TEXT,
-  updated_at TEXT,
-  version INTEGER DEFAULT 1,
-  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id);
-CREATE INDEX IF NOT EXISTS idx_tasks_user_id ON tasks(user_id);
-```
-
----
-
-## 🚀 Production Google OAuth Setup Requirements
-
-In Google Cloud Console under **APIs & Services > Credentials > OAuth 2.0 Client IDs**:
-
-1. **Authorized JavaScript origins**:
-   - `http://localhost:3000`
-   - `http://localhost:5000`
-   - `https://do-this.netlify.app` (and your production frontend domain)
-2. Ensure `ALLOWED_ORIGINS` in production server environment matches all frontend origins.
+### Static Build Output
+Running `npm run build` generates the optimized static bundle in the `/dist` directory, fully ready for deployment to Cloudflare Pages, Vercel, Netlify, or any static HTTP web host.

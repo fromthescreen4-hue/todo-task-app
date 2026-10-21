@@ -1,7 +1,7 @@
 import React from 'react';
-import { AlertTriangle, RefreshCw, Trash2, ShieldAlert } from 'lucide-react';
+import { AlertCircle, RefreshCw, Trash2, Home } from 'lucide-react';
 
-export class ErrorBoundary extends React.Component {
+export default class ErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
     this.state = { hasError: false, error: null, errorInfo: null };
@@ -12,83 +12,94 @@ export class ErrorBoundary extends React.Component {
   }
 
   componentDidCatch(error, errorInfo) {
-    console.error('[Application Crash Catch]', error, errorInfo);
+    console.error('[CORE FIT Error Boundary]', error, errorInfo);
     this.setState({ errorInfo });
   }
 
-  handleReset = () => {
-    this.setState({ hasError: false, error: null, errorInfo: null });
+  handleReload = () => {
     window.location.reload();
   };
 
-  handleClearCacheAndReload = () => {
+  handleHardReset = () => {
     try {
-      localStorage.clear();
-      sessionStorage.clear();
-    } catch (e) {}
-    window.location.href = '/';
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then((registrations) => {
+          for (const registration of registrations) {
+            registration.unregister();
+          }
+        });
+      }
+      if ('caches' in window) {
+        caches.keys().then((names) => {
+          for (const name of names) {
+            caches.delete(name);
+          }
+        });
+      }
+    } catch (e) {
+      console.warn('Cache clearing error:', e);
+    }
+    window.location.href = window.location.origin + '/?t=' + Date.now();
+  };
+
+  handleWipeStorage = () => {
+    if (window.confirm('Wipe local database and restart fresh? This will resolve any corrupted data.')) {
+      try {
+        localStorage.clear();
+        sessionStorage.clear();
+      } catch (e) {}
+      this.handleHardReset();
+    }
   };
 
   render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen bg-[#0f0e17] text-white flex items-center justify-center p-6 relative overflow-hidden font-sans">
-          {/* Glowing Background Auras */}
-          <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-rose-500/20 rounded-full blur-3xl pointer-events-none animate-coral-glow" />
-          <div className="absolute bottom-10 right-10 w-80 h-80 bg-orange-500/15 rounded-full blur-3xl pointer-events-none" />
-
-          <div className="max-w-md w-full bg-[#1a1926]/90 border border-white/10 rounded-3xl p-8 shadow-2xl backdrop-blur-xl relative z-10 text-center space-y-6">
-            
-            {/* Warning Icon Badge */}
-            <div className="w-16 h-16 mx-auto rounded-3xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-500 shadow-lg shadow-rose-500/10">
-              <ShieldAlert className="w-8 h-8 animate-bounce" />
-            </div>
-
-            <div className="space-y-2">
-              <span className="px-3 py-1 rounded-full text-[10px] font-extrabold uppercase tracking-widest bg-rose-500/20 text-rose-300 border border-rose-500/30">
-                Application Exception
-              </span>
-              <h1 className="text-xl font-extrabold tracking-tight text-white">
-                Something Went Wrong
-              </h1>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                An unexpected error occurred in the application view. Don't worry, your tasks remain stored safely.
-              </p>
-            </div>
-
-            {/* Error Message Box */}
-            {this.state.error && (
-              <div className="p-3 bg-black/40 rounded-2xl border border-white/5 text-left max-h-32 overflow-y-auto">
-                <div className="text-[10px] font-bold text-rose-400 uppercase tracking-wider mb-1 flex items-center gap-1">
-                  <AlertTriangle className="w-3 h-3" /> Error Trace
-                </div>
-                <code className="text-[11px] text-slate-300 font-mono break-all leading-tight block">
-                  {this.state.error.toString()}
-                </code>
+        <div className="min-h-screen bg-[#F6F6F7] text-[#15171A] flex flex-col items-center justify-center p-4 sm:p-6">
+          <div className="w-full max-w-md bg-[#FFFFFF] border border-[#D9DDE2] rounded-[10px] p-6 shadow-sm space-y-5">
+            <div className="flex items-center gap-3 border-b border-[#D9DDE2] pb-4">
+              <div className="w-10 h-10 rounded-[8px] bg-[#FEF2F2] border border-[#FCA5A5] flex items-center justify-center text-[#FFAE00] flex-shrink-0">
+                <AlertCircle className="w-5 h-5" />
               </div>
-            )}
+              <div>
+                <h1 className="text-base font-extrabold uppercase tracking-tight text-[#15171A]">
+                  Something Went Wrong
+                </h1>
+                <p className="text-xs text-[#555B63] mt-0.5">
+                  An unexpected error occurred. Please try reloading the app.
+                </p>
+              </div>
+            </div>
 
-            {/* Action Buttons */}
-            <div className="space-y-3 pt-2">
+            <div className="p-3 bg-[#F6F6F7] rounded-[6px] border border-[#EAECEF] text-xs font-mono text-[#555B63] overflow-x-auto max-h-32">
+              {this.state.error?.message || 'Unknown runtime error'}
+            </div>
+
+            <div className="space-y-2 pt-2">
               <button
-                onClick={this.handleReset}
-                className="w-full py-3 px-4 bg-gradient-to-r from-orange-500 via-rose-500 to-amber-500 hover:opacity-95 text-white font-bold text-xs rounded-2xl shadow-lg shadow-orange-500/20 transition-all flex items-center justify-center gap-2 cursor-pointer"
+                onClick={this.handleReload}
+                className="btn btn-primary w-full py-2.5 text-xs font-bold justify-center"
               >
-                <RefreshCw className="w-4 h-4" /> Reload Workspace
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Reload Application</span>
               </button>
 
               <button
-                onClick={this.handleClearCacheAndReload}
-                className="w-full py-2.5 px-4 bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white font-bold text-xs rounded-2xl border border-white/10 transition-all flex items-center justify-center gap-2 cursor-pointer"
+                onClick={this.handleHardReset}
+                className="btn btn-secondary w-full py-2.5 text-xs font-bold justify-center"
               >
-                <Trash2 className="w-4 h-4 text-rose-400" /> Reset Local Cache & Restart
+                <RefreshCw className="w-3.5 h-3.5 text-[#0284C7]" />
+                <span>Clear Cache &amp; Refresh</span>
+              </button>
+
+              <button
+                onClick={this.handleWipeStorage}
+                className="btn btn-outline w-full py-2.5 text-xs font-bold justify-center text-[#DC2626] hover:bg-[#FEF2F2]"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Reset Local Data &amp; Restart</span>
               </button>
             </div>
-
-            <div className="text-[10px] text-slate-500">
-              DO THIS Productivity Suite • Recovery Mode
-            </div>
-
           </div>
         </div>
       );

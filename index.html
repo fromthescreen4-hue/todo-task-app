@@ -1,19 +1,88 @@
 <!DOCTYPE html>
-<html lang="en" class="dark">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/png" href="/dothis-logo.png" />
-    <link rel="manifest" href="/manifest.json" />
-    <meta name="theme-color" content="#4f46e5" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>DO THIS - Task & Google Calendar Suite</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-    <script src="https://accounts.google.com/gsi/client" async defer></script>
-  </head>
-  <body class="bg-[#090d16] text-slate-100 font-['Plus_Jakarta_Sans',sans-serif] antialiased selection:bg-orange-500 selection:text-white min-h-screen">
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
-  </body>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <script>
+    // Strict zoom prevention for touch & mobile devices
+    document.addEventListener('gesturestart', function(e) { e.preventDefault(); }, { passive: false });
+    document.addEventListener('gesturechange', function(e) { e.preventDefault(); }, { passive: false });
+    document.addEventListener('gestureend', function(e) { e.preventDefault(); }, { passive: false });
+    // Prevent double tap zoom
+    var lastTouchEnd = 0;
+    document.addEventListener('touchend', function(event) {
+      var now = (new Date()).getTime();
+      if (now - lastTouchEnd <= 300) {
+        event.preventDefault();
+      }
+      lastTouchEnd = now;
+    }, false);
+
+    // Prevent saving images, dragging images, and image context menus
+    document.addEventListener('contextmenu', function(e) {
+      if (e.target && (e.target.tagName === 'IMG' || e.target.closest('img'))) {
+        e.preventDefault();
+      }
+    }, false);
+
+    document.addEventListener('dragstart', function(e) {
+      if (e.target && (e.target.tagName === 'IMG' || e.target.closest('img'))) {
+        e.preventDefault();
+      }
+    }, false);
+  </script>
+  <title>CORE FIT | Build Strength From Within</title>
+  <meta name="description" content="Premium minimal fitness and nutrition performance tracker with authentic Indian food database and biomechanical movement guidance." />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="icon" type="image/png" href="/core-fit-logo.png" />
+  <link rel="apple-touch-icon" href="/core-fit-logo.png" />
+  <link rel="manifest" href="/manifest.json" />
+  <meta name="theme-color" content="#FFAE00" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <script>
+    // Self-healing: If an asset script fails to load (e.g. 404 due to stale PWA cache), purge cache and reload once
+    window.addEventListener('error', function(e) {
+      if (e.target && (e.target.tagName === 'SCRIPT' || e.target.tagName === 'LINK')) {
+        var key = 'corefit_auto_reload_attempt';
+        var now = Date.now();
+        var lastAttempt = parseInt(sessionStorage.getItem(key) || '0', 10);
+        if (now - lastAttempt > 8000) {
+          sessionStorage.setItem(key, String(now));
+          if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.getRegistrations().then(function(regs) {
+              for (var i = 0; i < regs.length; i++) regs[i].unregister();
+            });
+          }
+          if ('caches' in window) {
+            caches.keys().then(function(keys) {
+              for (var i = 0; i < keys.length; i++) caches.delete(keys[i]);
+            });
+          }
+          setTimeout(function() {
+            window.location.reload();
+          }, 300);
+        }
+      }
+    }, true);
+  </script>
+</head>
+<body class="bg-[#F6F6F7] text-[#15171A]">
+  <div id="root">
+    <!-- Animated Preload State (Replaced seamlessly upon React mount) -->
+    <div style="min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #0D0F12; padding: 24px;">
+      <img src="/core-fit-logo.png" alt="CORE FIT" style="width: 280px; max-width: 85vw; height: auto; object-fit: contain; filter: drop-shadow(0 8px 24px rgba(255,174,0,0.2));" />
+    </div>
+  </div>
+  <script type="module" src="/src/main.jsx"></script>
+</body>
 </html>

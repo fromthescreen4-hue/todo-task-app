@@ -1,11 +1,21 @@
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
 
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
+  define: {
+    'process.env': {}
+  },
   server: {
+    host: true,
+    port: 3000
+  },
+  preview: {
+    host: true,
     port: 3000,
-    open: true
+    headers: {
+      'Cache-Control': 'no-store, no-cache, must-revalidate'
+    }
   }
-})
+});
